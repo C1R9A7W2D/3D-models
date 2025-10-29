@@ -5,7 +5,7 @@ import math
 
 class Point:
     def __init__(self, x, y, z):
-        self.coordinates = np.array([x, y, z, 1.0])  # Добавляем однородную координату
+        self.coordinates = np.array([x, y, z, 1.0])
 
     def transform(self, matrix):
         transformed_coordinates = np.dot(matrix, self.coordinates)
@@ -17,6 +17,32 @@ class Polygon:
 
     def transform(self, matrix):
         self.vertices = [vertex.transform(matrix) for vertex in self.vertices]
+        
+    def get_center_z(self):
+        return np.mean([v.coordinates[2] for v in self.vertices])
+        
+    def get_normal(self):
+        if len(self.vertices) < 3:
+            return np.array([0, 0, 1])
+            
+        # Берем первые три вершины для вычисления нормали
+        v0 = self.vertices[0].coordinates[:3]
+        v1 = self.vertices[1].coordinates[:3]
+        v2 = self.vertices[2].coordinates[:3]
+        
+        # Векторы в плоскости полигона
+        edge1 = v1 - v0
+        edge2 = v2 - v0
+        
+        # Векторное произведение дает нормаль
+        normal = np.cross(edge1, edge2)
+        
+        # Нормализуем нормаль
+        norm = np.linalg.norm(normal)
+        if norm > 0:
+            normal = normal / norm
+            
+        return normal
 
     @staticmethod
     def polygons_from_vertices(vertices, faces):
@@ -33,86 +59,263 @@ class Polyhedron:
     def transform(self, matrix):
         for polygon in self.polygons:
             polygon.transform(matrix)
+            
+    def get_center(self):
+        all_vertices = []
+        for polygon in self.polygons:
+            all_vertices.extend(polygon.vertices)
+        
+        if not all_vertices:
+            return np.array([0, 0, 0])
+            
+        return np.mean([v.coordinates[:3] for v in all_vertices], axis=0)
 
 class Application:
     def __init__(self, root):
         self.root = root
-        self.root.title("3D Polyhedra")
-        self.canvas = tk.Canvas(self.root, width=600, height=600)
-        self.canvas.pack()
+        self.root.title("3D Polyhedra - Аффинные преобразования")
+        self.root.geometry("800x700")
+        
+        self.canvas = tk.Canvas(self.root, width=600, height=600, bg="white")
+        self.canvas.pack(side=tk.LEFT, padx=10, pady=10)
+        
         self.polyhedron = None
-        self.projection_type = 'perspective'  # По умолчанию перспективная проекция
+        self.projection_type = 'perspective'
+        
+        # Создание интерфейса
+        self.create_controls_panel()
         self.create_polyhedron('Tetrahedron')
-        self.create_dropdown()
-        self.create_buttons()
-        self.create_projection_buttons()
-        self.create_rotation_controls()
+        self.render()
 
-    def create_dropdown(self):
+    def create_controls_panel(self):
+        controls_frame = tk.Frame(self.root)
+        controls_frame.pack(side=tk.RIGHT, fill=tk.Y, padx=10, pady=10)
+        
+        # Выбор многогранника
+        tk.Label(controls_frame, text="Выбор многогранника:", font=("Arial", 10, "bold")).pack(anchor=tk.W, pady=(0, 5))
         self.polyhedron_var = tk.StringVar(value='Tetrahedron')
-        self.dropdown = ttk.Combobox(self.root, textvariable=self.polyhedron_var)
-        self.dropdown['values'] = ['Tetrahedron', 'Cube', 'Octahedron', 'Icosahedron', 'Dodecahedron']
-        self.dropdown.bind("<<ComboboxSelected>>", self.change_polyhedron)
-        self.dropdown.pack()       
+        polyhedron_combo = ttk.Combobox(controls_frame, textvariable=self.polyhedron_var, width=15)
+        polyhedron_combo['values'] = ['Tetrahedron', 'Cube', 'Octahedron', 'Icosahedron', 'Dodecahedron']
+        polyhedron_combo.bind("<<ComboboxSelected>>", self.change_polyhedron)
+        polyhedron_combo.pack(fill=tk.X, pady=(0, 10))
+        
+        # Выбор проекции
+        tk.Label(controls_frame, text="Тип проекции:", font=("Arial", 10, "bold")).pack(anchor=tk.W, pady=(0, 5))
+        self.projection_var = tk.StringVar(value=self.projection_type)
+        tk.Radiobutton(controls_frame, text="Перспективная", 
+                      variable=self.projection_var, value='perspective',
+                      command=lambda: self.set_projection('perspective')).pack(anchor=tk.W)
+        tk.Radiobutton(controls_frame, text="Аксонометрическая", 
+                      variable=self.projection_var, value='axonometric',
+                      command=lambda: self.set_projection('axonometric')).pack(anchor=tk.W)
+        
+        # Разделитель
+        ttk.Separator(controls_frame, orient=tk.HORIZONTAL).pack(fill=tk.X, pady=10)
+        
+        # Аффинные преобразования
+        tk.Label(controls_frame, text="Аффинные преобразования:", font=("Arial", 10, "bold")).pack(anchor=tk.W, pady=(0, 5))
+        
+        self.create_translation_controls(controls_frame)
+        self.create_rotation_controls(controls_frame)
+        self.create_scaling_controls(controls_frame)
+        self.create_reflection_controls(controls_frame)
+        self.create_arbitrary_rotation_controls(controls_frame)
+
+    def create_translation_controls(self, parent):
+        frame = tk.LabelFrame(parent, text="Смещение", padx=5, pady=5)
+        frame.pack(fill=tk.X, pady=5)
+        
+        input_frame = tk.Frame(frame)
+        input_frame.pack(fill=tk.X)
+        
+        tk.Label(input_frame, text="dx:").grid(row=0, column=0, padx=2)
+        self.dx_entry = tk.Entry(input_frame, width=5)
+        self.dx_entry.insert(0, "10")
+        self.dx_entry.grid(row=0, column=1, padx=2)
+        
+        tk.Label(input_frame, text="dy:").grid(row=0, column=2, padx=2)
+        self.dy_entry = tk.Entry(input_frame, width=5)
+        self.dy_entry.insert(0, "10")
+        self.dy_entry.grid(row=0, column=3, padx=2)
+        
+        tk.Label(input_frame, text="dz:").grid(row=0, column=4, padx=2)
+        self.dz_entry = tk.Entry(input_frame, width=5)
+        self.dz_entry.insert(0, "10")
+        self.dz_entry.grid(row=0, column=5, padx=2)
+        
+        tk.Button(frame, text="Применить смещение", command=self.apply_translation).pack(pady=5)
+
+    def create_rotation_controls(self, parent):
+        frame = tk.LabelFrame(parent, text="Вращение", padx=5, pady=5)
+        frame.pack(fill=tk.X, pady=5)
+        
+        # Вращение вокруг точки
+        point_frame = tk.Frame(frame)
+        point_frame.pack(fill=tk.X, pady=2)
+        
+        tk.Label(point_frame, text="Вокруг точки:").pack(side=tk.LEFT)
+        self.center_x_entry = tk.Entry(point_frame, width=5)
+        self.center_x_entry.insert(0, "300")
+        self.center_x_entry.pack(side=tk.LEFT, padx=2)
+        
+        self.center_y_entry = tk.Entry(point_frame, width=5)
+        self.center_y_entry.insert(0, "300")
+        self.center_y_entry.pack(side=tk.LEFT, padx=2)
+        
+        self.center_z_entry = tk.Entry(point_frame, width=5)
+        self.center_z_entry.insert(0, "300")
+        self.center_z_entry.pack(side=tk.LEFT, padx=2)
+        
+        self.angle_entry = tk.Entry(point_frame, width=5)
+        self.angle_entry.insert(0, "30")
+        self.angle_entry.pack(side=tk.LEFT, padx=2)
+        tk.Label(point_frame, text="°").pack(side=tk.LEFT)
+        
+        tk.Button(point_frame, text="Применить", command=self.apply_rotation_around_point).pack(side=tk.LEFT, padx=5)
+        
+        # Вращение вокруг центра
+        center_frame = tk.Frame(frame)
+        center_frame.pack(fill=tk.X, pady=2)
+        
+        tk.Label(center_frame, text="Вокруг центра:").pack(side=tk.LEFT)
+        tk.Button(center_frame, text="X", command=lambda: self.apply_rotation_around_center('x')).pack(side=tk.LEFT, padx=2)
+        tk.Button(center_frame, text="Y", command=lambda: self.apply_rotation_around_center('y')).pack(side=tk.LEFT, padx=2)
+        tk.Button(center_frame, text="Z", command=lambda: self.apply_rotation_around_center('z')).pack(side=tk.LEFT, padx=2)
+
+    def create_scaling_controls(self, parent):
+        frame = tk.LabelFrame(parent, text="Масштабирование", padx=5, pady=5)
+        frame.pack(fill=tk.X, pady=5)
+        
+        scale_frame = tk.Frame(frame)
+        scale_frame.pack(fill=tk.X)
+        
+        tk.Label(scale_frame, text="Коэффициент:").pack(side=tk.LEFT)
+        self.scale_factor_entry = tk.Entry(scale_frame, width=5)
+        self.scale_factor_entry.insert(0, "1.5")
+        self.scale_factor_entry.pack(side=tk.LEFT, padx=5)
+        
+        button_frame = tk.Frame(frame)
+        button_frame.pack(fill=tk.X, pady=5)
+        
+        tk.Button(button_frame, text="От центра", command=self.apply_scaling_around_center).pack(side=tk.LEFT, padx=2)
+        tk.Button(button_frame, text="От точки", command=self.apply_scaling_around_point).pack(side=tk.LEFT, padx=2)
+
+    def create_reflection_controls(self, parent):
+        frame = tk.LabelFrame(parent, text="Отражение", padx=5, pady=5)
+        frame.pack(fill=tk.X, pady=5)
+        
+        button_frame = tk.Frame(frame)
+        button_frame.pack()
+        
+        tk.Button(button_frame, text="XY плоскость", command=lambda: self.apply_reflection('xy')).pack(side=tk.LEFT, padx=2)
+        tk.Button(button_frame, text="XZ плоскость", command=lambda: self.apply_reflection('xz')).pack(side=tk.LEFT, padx=2)
+        tk.Button(button_frame, text="YZ плоскость", command=lambda: self.apply_reflection('yz')).pack(side=tk.LEFT, padx=2)
+
+    def create_arbitrary_rotation_controls(self, parent):
+        frame = tk.LabelFrame(parent, text="Вращение вокруг произвольной прямой", padx=5, pady=5)
+        frame.pack(fill=tk.X, pady=5)
+        
+        p1_frame = tk.Frame(frame)
+        p1_frame.pack(fill=tk.X, pady=2)
+        tk.Label(p1_frame, text="Точка 1:").pack(side=tk.LEFT)
+        self.p1_x = tk.Entry(p1_frame, width=5)
+        self.p1_x.insert(0, "200")
+        self.p1_x.pack(side=tk.LEFT, padx=2)
+        self.p1_y = tk.Entry(p1_frame, width=5)
+        self.p1_y.insert(0, "200")
+        self.p1_y.pack(side=tk.LEFT, padx=2)
+        self.p1_z = tk.Entry(p1_frame, width=5)
+        self.p1_z.insert(0, "200")
+        self.p1_z.pack(side=tk.LEFT, padx=2)
+        
+        p2_frame = tk.Frame(frame)
+        p2_frame.pack(fill=tk.X, pady=2)
+        tk.Label(p2_frame, text="Точка 2:").pack(side=tk.LEFT)
+        self.p2_x = tk.Entry(p2_frame, width=5)
+        self.p2_x.insert(0, "400")
+        self.p2_x.pack(side=tk.LEFT, padx=2)
+        self.p2_y = tk.Entry(p2_frame, width=5)
+        self.p2_y.insert(0, "400")
+        self.p2_y.pack(side=tk.LEFT, padx=2)
+        self.p2_z = tk.Entry(p2_frame, width=5)
+        self.p2_z.insert(0, "400")
+        self.p2_z.pack(side=tk.LEFT, padx=2)
+        
+        angle_frame = tk.Frame(frame)
+        angle_frame.pack(fill=tk.X, pady=2)
+        tk.Label(angle_frame, text="Угол:").pack(side=tk.LEFT)
+        self.arbitrary_angle_entry = tk.Entry(angle_frame, width=5)
+        self.arbitrary_angle_entry.insert(0, "45")
+        self.arbitrary_angle_entry.pack(side=tk.LEFT, padx=2)
+        tk.Label(angle_frame, text="°").pack(side=tk.LEFT)
+        
+        tk.Button(frame, text="Применить вращение", command=self.apply_arbitrary_rotation).pack(pady=5)
 
     def change_polyhedron(self, event):
         self.create_polyhedron(self.polyhedron_var.get())
         self.render()
-        
+
+    def set_projection(self, projection_type):
+        self.projection_type = projection_type
+        self.render()
+
     def create_polyhedron(self, shape):
-        scale = 100  # Базовый масштаб
+        scale = 80
         
         if shape == 'Tetrahedron':
-            # Тетраэдр - 4 вершины, 4 грани-треугольника
+            # Тетраэдр - 4 треугольные грани (вершины упорядочены против часовой стрелки)
             vertices = [
-                Point(-scale, scale, -scale), 
-                Point(scale, scale, scale), 
-                Point(scale, -scale, -scale), 
-                Point(-scale, -scale, scale)
+                Point(0, 0, scale),           # 0: верх
+                Point(0, scale, -scale/3),    # 1: перед  
+                Point(-scale*0.866, -scale/2, -scale/3),  # 2: лево
+                Point(scale*0.866, -scale/2, -scale/3)    # 3: право
             ]
-            faces = [[0, 1, 2], [0, 1, 3], [0, 2, 3], [1, 2, 3]]
-            polygons = Polygon.polygons_from_vertices(vertices, faces)
+            # Грани ориентированы наружу (против часовой стрелки)
+            faces = [
+                [0, 1, 2], [0, 2, 3], [0, 3, 1], [1, 3, 2]
+            ]
             
         elif shape == 'Cube':
-            # Куб (Hexahedron) - 8 вершин, 6 граней-четырехугольников
+            # Куб - 6 квадратных граней
+            s = scale
             vertices = [
-                Point(-scale, scale, -scale),
-                Point(scale, scale, -scale),
-                Point(scale, -scale, -scale),
-                Point(-scale, -scale, -scale),
-                Point(-scale, scale, scale),
-                Point(scale, scale, scale),
-                Point(scale, -scale, scale),
-                Point(-scale, -scale, scale)
+                Point(-s, -s, -s),  # 0
+                Point(s, -s, -s),   # 1
+                Point(s, s, -s),    # 2
+                Point(-s, s, -s),   # 3
+                Point(-s, -s, s),   # 4
+                Point(s, -s, s),    # 5
+                Point(s, s, s),     # 6
+                Point(-s, s, s)     # 7
             ]
+            # Грани ориентированы наружу (против часовой стрелки)
             faces = [
-                [0, 1, 2, 3],  # задняя грань
-                [4, 5, 6, 7],  # передняя грань
-                [0, 1, 5, 4],  # верхняя грань
-                [2, 3, 7, 6],  # нижняя грань
-                [0, 3, 7, 4],  # левая грань
-                [1, 2, 6, 5]   # правая грань
+                [0, 1, 2, 3],  # зад
+                [4, 7, 6, 5],  # перед  
+                [0, 4, 5, 1],  # низ
+                [2, 6, 7, 3],  # верх
+                [0, 3, 7, 4],  # лево
+                [1, 5, 6, 2]   # право
             ]
-            polygons = Polygon.polygons_from_vertices(vertices, faces)
             
         elif shape == 'Octahedron':
-            # Октаэдр - 6 вершин, 8 граней-треугольников
+            # Октаэдр - 8 треугольных граней
             vertices = [
-                Point(0, 0, -scale),        # 0 - нижняя вершина
-                Point(-scale, 0, 0),        # 1
-                Point(0, scale, 0),         # 2
-                Point(scale, 0, 0),         # 3
-                Point(0, -scale, 0),        # 4
-                Point(0, 0, scale)          # 5 - верхняя вершина
+                Point(0, 0, scale),      # 0: верх
+                Point(0, scale, 0),      # 1: перед
+                Point(scale, 0, 0),      # 2: право
+                Point(0, -scale, 0),     # 3: зад
+                Point(-scale, 0, 0),     # 4: лево
+                Point(0, 0, -scale)      # 5: низ
             ]
+            # Грани ориентированы наружу
             faces = [
-                [0, 1, 2], [0, 2, 3], [0, 3, 4], [0, 4, 1],  # нижние грани
-                [5, 2, 1], [5, 3, 2], [5, 4, 3], [5, 1, 4]   # верхние грани
+                [0, 1, 2], [0, 2, 3], [0, 3, 4], [0, 4, 1],  # верх
+                [5, 2, 1], [5, 3, 2], [5, 4, 3], [5, 1, 4]   # низ
             ]
-            polygons = Polygon.polygons_from_vertices(vertices, faces)
             
         elif shape == 'Icosahedron':
-            # Икосаэдр - 12 вершин, 20 граней-треугольников
+            # Икосаэдр - 20 треугольных граней
             vertices = []
             
             # Верхняя вершина
@@ -222,476 +425,267 @@ class Application:
             polygons = Polygon.polygons_from_vertices(vertices, faces)
             
         else:
-            polygons = []
+            vertices = []
+            faces = []
             
+        polygons = Polygon.polygons_from_vertices(vertices, faces)
         self.polyhedron = Polyhedron(polygons)
-        # Центрируем многогранник
         self.center_polyhedron()
-        self.render()
 
     def center_polyhedron(self):
-        # Находим центр многогранника
-        all_vertices = []
-        for polygon in self.polyhedron.polygons:
-            all_vertices.extend(polygon.vertices)
-        
-        if not all_vertices:
+        if not self.polyhedron:
             return
             
-        center = np.mean([v.coordinates[:3] for v in all_vertices], axis=0)
-        
-        # Перемещаем в центр холста
+        center = self.polyhedron.get_center()
         translate_matrix = self.get_translation_matrix(300 - center[0], 300 - center[1], 300 - center[2])
         self.polyhedron.transform(translate_matrix)
 
-    def create_projection_buttons(self):
-        projection_frame = tk.Frame(self.root)
-        projection_frame.pack()
-        
-        self.projection_var = tk.StringVar(value=self.projection_type)
-        
-        tk.Radiobutton(projection_frame, text="Перспективная проекция", 
-                      variable=self.projection_var, 
-                      value='perspective', 
-                      command=lambda: self.set_projection('perspective')).pack(side=tk.LEFT)
-        
-        tk.Radiobutton(projection_frame, text="Аксонометрическая проекция", 
-                      variable=self.projection_var, 
-                      value='axonometric', 
-                      command=lambda: self.set_projection('axonometric')).pack(side=tk.LEFT)
+    # МАТРИЧНЫЕ ПРЕОБРАЗОВАНИЯ
+    def get_translation_matrix(self, dx, dy, dz):
+        return np.array([
+            [1, 0, 0, dx],
+            [0, 1, 0, dy],
+            [0, 0, 1, dz],
+            [0, 0, 0, 1]
+        ])
 
-    def set_projection(self, projection_type):
-        self.projection_type = projection_type
-        self.render()
+    def get_rotation_matrix_x(self, angle):
+        cos_a, sin_a = math.cos(angle), math.sin(angle)
+        return np.array([
+            [1, 0, 0, 0],
+            [0, cos_a, -sin_a, 0],
+            [0, sin_a, cos_a, 0],
+            [0, 0, 0, 1]
+        ])
 
-    def create_rotation_controls(self):
-        # ПЕРЕМЕЩЕНА КНОПКА "ПРИМЕНИТЬ ВРАЩЕНИЕ" ВЫШЕ
-        arbitrary_rotation_frame = tk.Frame(self.root)
-        arbitrary_rotation_frame.pack(pady=5)
-        
-        tk.Label(arbitrary_rotation_frame, text="Вращение вокруг произвольной прямой:").pack()
-        
-        # Верхняя строка с кнопкой ПРИМЕНИТЬ ВРАЩЕНИЕ
-        top_row = tk.Frame(arbitrary_rotation_frame)
-        top_row.pack(pady=5)
-        
-        tk.Button(top_row, text="Применить вращение", 
-                 command=self.apply_arbitrary_rotation).pack(side=tk.LEFT, padx=10)
-        
-        tk.Label(top_row, text="Угол (градусы):").pack(side=tk.LEFT)
-        self.angle_entry = tk.Entry(top_row, width=5)
-        self.angle_entry.insert(0, "30")
-        self.angle_entry.pack(side=tk.LEFT, padx=5)
-        
-        # Нижняя строка с точками
-        points_frame = tk.Frame(arbitrary_rotation_frame)
-        points_frame.pack()
-        
-        # Точка 1
-        tk.Label(points_frame, text="Точка 1:").grid(row=0, column=0)
-        self.p1_x = tk.Entry(points_frame, width=5)
-        self.p1_x.insert(0, "200")
-        self.p1_x.grid(row=0, column=1)
-        self.p1_y = tk.Entry(points_frame, width=5)
-        self.p1_y.insert(0, "200")
-        self.p1_y.grid(row=0, column=2)
-        self.p1_z = tk.Entry(points_frame, width=5)
-        self.p1_z.insert(0, "200")
-        self.p1_z.grid(row=0, column=3)
-        
-        # Точка 2
-        tk.Label(points_frame, text="Точка 2:").grid(row=1, column=0)
-        self.p2_x = tk.Entry(points_frame, width=5)
-        self.p2_x.insert(0, "400")
-        self.p2_x.grid(row=1, column=1)
-        self.p2_y = tk.Entry(points_frame, width=5)
-        self.p2_y.insert(0, "400")
-        self.p2_y.grid(row=1, column=2)
-        self.p2_z = tk.Entry(points_frame, width=5)
-        self.p2_z.insert(0, "400")
-        self.p2_z.grid(row=1, column=3)
-        
-        # Вращение вокруг координатных осей через центр многогранника
-        axis_rotation_frame = tk.Frame(self.root)
-        axis_rotation_frame.pack(pady=5)
-        
-        tk.Label(axis_rotation_frame, text="Вращение вокруг осей через центр:").pack(side=tk.LEFT)
-        
-        tk.Button(axis_rotation_frame, text="Вращать вокруг X", 
-                command=lambda: self.apply_axis_rotation_through_center('x')).pack(side=tk.LEFT, padx=2)
-        tk.Button(axis_rotation_frame, text="Вращать вокруг Y", 
-                command=lambda: self.apply_axis_rotation_through_center('y')).pack(side=tk.LEFT, padx=2)
-        tk.Button(axis_rotation_frame, text="Вращать вокруг Z", 
-                command=lambda: self.apply_axis_rotation_through_center('z')).pack(side=tk.LEFT, padx=2)
+    def get_rotation_matrix_y(self, angle):
+        cos_a, sin_a = math.cos(angle), math.sin(angle)
+        return np.array([
+            [cos_a, 0, sin_a, 0],
+            [0, 1, 0, 0],
+            [-sin_a, 0, cos_a, 0],
+            [0, 0, 0, 1]
+        ])
 
-    def create_buttons(self):
-        transform_frame = tk.Frame(self.root)
-        transform_frame.pack()
-
-        # Смещение
-        offset_frame = tk.Frame(transform_frame)
-        offset_frame.grid(row=0, column=0, columnspan=6, pady=5)
-        
-        tk.Label(offset_frame, text="Смещение:").pack(side=tk.LEFT)
-        tk.Label(offset_frame, text="dx:").pack(side=tk.LEFT)
-        self.dx_entry = tk.Entry(offset_frame, width=5)
-        self.dx_entry.insert(0, "0")
-        self.dx_entry.pack(side=tk.LEFT, padx=2)
-        
-        tk.Label(offset_frame, text="dy:").pack(side=tk.LEFT)
-        self.dy_entry = tk.Entry(offset_frame, width=5)
-        self.dy_entry.insert(0, "0")
-        self.dy_entry.pack(side=tk.LEFT, padx=2)
-
-        tk.Label(offset_frame, text="dz:").pack(side=tk.LEFT)
-        self.dz_entry = tk.Entry(offset_frame, width=5)
-        self.dz_entry.insert(0, "0")
-        self.dz_entry.pack(side=tk.LEFT, padx=2)
-        
-        tk.Button(offset_frame, text="Применить смещение", command=self.apply_offset).pack(side=tk.LEFT, padx=5)
-
-        # Отражение
-        reflection_frame = tk.Frame(transform_frame)
-        reflection_frame.grid(row=1, column=0, columnspan=6, pady=5)
-        
-        tk.Label(reflection_frame, text="Отражение:").pack(side=tk.LEFT)
-        tk.Button(reflection_frame, text="Отражение XY", command=self.apply_reflection_xy).pack(side=tk.LEFT, padx=2)
-        tk.Button(reflection_frame, text="Отражение XZ", command=self.apply_reflection_xz).pack(side=tk.LEFT, padx=2)
-        tk.Button(reflection_frame, text="Отражение YZ", command=self.apply_reflection_yz).pack(side=tk.LEFT, padx=2)
-
-        # Масштабирование
-        scale_frame = tk.Frame(transform_frame)
-        scale_frame.grid(row=2, column=0, columnspan=6, pady=5)
-        
-        tk.Label(scale_frame, text="Масштабирование:").pack(side=tk.LEFT)
-        tk.Label(scale_frame, text="Масштаб:").pack(side=tk.LEFT)
-        self.scale_factor_entry = tk.Entry(scale_frame, width=5)
-        self.scale_factor_entry.insert(0, "1.5")
-        self.scale_factor_entry.pack(side=tk.LEFT, padx=2)
-        
-        tk.Button(scale_frame, text="От центра фигуры", 
-                 command=self.apply_scaling_own_center).pack(side=tk.LEFT, padx=2)
-        
-        tk.Button(scale_frame, text="От точки", 
-                 command=self.apply_scaling).pack(side=tk.LEFT, padx=2)
-
-        # Вращение вокруг точки
-        rotation_frame = tk.Frame(transform_frame)
-        rotation_frame.grid(row=3, column=0, columnspan=6, pady=5)
-        
-        tk.Label(rotation_frame, text="Вращение:").pack(side=tk.LEFT)
-        tk.Label(rotation_frame, text="Центр X:").pack(side=tk.LEFT)
-        self.center_x_entry = tk.Entry(rotation_frame, width=5)
-        self.center_x_entry.insert(0, "300")
-        self.center_x_entry.pack(side=tk.LEFT, padx=2)
-        
-        tk.Label(rotation_frame, text="Центр Y:").pack(side=tk.LEFT)
-        self.center_y_entry = tk.Entry(rotation_frame, width=5)
-        self.center_y_entry.insert(0, "300")
-        self.center_y_entry.pack(side=tk.LEFT, padx=2)
-
-        tk.Label(rotation_frame, text="Центр Z:").pack(side=tk.LEFT)
-        self.center_z_entry = tk.Entry(rotation_frame, width=5)
-        self.center_z_entry.insert(0, "300")
-        self.center_z_entry.pack(side=tk.LEFT, padx=2)
-        
-        tk.Label(rotation_frame, text="Угол:").pack(side=tk.LEFT)
-        self.degrees_entry = tk.Entry(rotation_frame, width=5)
-        self.degrees_entry.insert(0, "30")
-        self.degrees_entry.pack(side=tk.LEFT, padx=2)
-        
-        tk.Button(rotation_frame, text="Вокруг точки", command=self.apply_rotation).pack(side=tk.LEFT, padx=5)
-        
-        tk.Button(rotation_frame, text="Вокруг центра фигуры", command=self.apply_rotation_own_center).pack(side=tk.LEFT, padx=5)
-
-    def apply_offset(self):
-        """Смещение фигуры на указанные расстояния по осям X, Y, Z"""
-        if not self.polyhedron:
-            return
-            
-        dx = int(self.dx_entry.get() or 0)
-        dy = int(self.dy_entry.get() or 0)
-        dz = int(self.dz_entry.get() or 0)
-        
-        self.apply_transform(self.get_translation_matrix(dx, dy, dz))
-
-    def apply_rotation(self):
-        """Вращение фигуры вокруг указанной точки на заданный угол"""
-        if not self.polyhedron:
-            return
-            
-        center_x = int(self.center_x_entry.get() or 0)
-        center_y = int(self.center_y_entry.get() or 0)
-        center_z = int(self.center_z_entry.get() or 0)
-        degrees = int(self.degrees_entry.get() or 0)
-        
-        self.apply_transform(self.get_rotation_matrix(center_x, center_y, center_z, degrees))
-
-    def apply_rotation_own_center(self):
-        """Вращение фигуры вокруг ее собственного центра на заданный угол"""
-        if not self.polyhedron:
-            return
-            
-        degrees = int(self.degrees_entry.get() or 0)
-        
-        # Находим центр многогранника
-        all_vertices = []
-        for polygon in self.polyhedron.polygons:
-            all_vertices.extend(polygon.vertices)
-
-        center = np.mean([v.coordinates[:3] for v in all_vertices], axis=0)
-        
-        center_x = center[0]
-        center_y = center[1]
-        center_z = center[2]
-            
-        self.apply_transform(self.get_rotation_matrix(center_x, center_y, center_z, degrees))
-
-    def apply_scaling(self):
-        """Масштабирование фигуры относительно указанной точки"""
-        if not self.polyhedron:
-            return
-            
-        scale_factor = float(self.scale_factor_entry.get() or 1.0)
-        center_x = int(self.center_x_entry.get() or 0)
-        center_y = int(self.center_y_entry.get() or 0)
-        center_z = int(self.center_z_entry.get() or 0)
-        
-        self.apply_transform(self.get_scaling_matrix(center_x, center_y, center_z, scale_factor))
-
-    def apply_reflection_xy(self):
-        matrix = self.get_reflection_matrix('xy')
-        self.apply_transform(matrix)
-
-    def apply_reflection_xz(self):
-        matrix = self.get_reflection_matrix('xz')
-        self.apply_transform(matrix)
-
-    def apply_reflection_yz(self):
-        matrix = self.get_reflection_matrix('yz')
-        self.apply_transform(matrix)
-
-    def get_reflection_matrix(self, plane):
-        if plane == 'xy':
-            return np.array([[1, 0, 0, 0],
-                            [0, 1, 0, 0],
-                            [0, 0, -1, 0],
-                            [0, 0, 0, 1]])
-        elif plane == 'xz':
-            return np.array([[1, 0, 0, 0],
-                            [0, -1, 0, 0],
-                            [0, 0, 1, 0],
-                            [0, 0, 0, 1]])
-        elif plane == 'yz':
-            return np.array([[-1, 0, 0, 0],
-                            [0, 1, 0, 0],
-                            [0, 0, 1, 0],
-                            [0, 0, 0, 1]])
-
-    def apply_scaling_own_center(self):
-        """Масштабирование фигуры относительно ее собственного центра"""
-        if not self.polyhedron:
-            return
-            
-        scale_factor = float(self.scale_factor_entry.get() or 1.0)
-
-        # Находим центр многогранника
-        all_vertices = []
-        for polygon in self.polyhedron.polygons:
-            all_vertices.extend(polygon.vertices)
-
-        center = np.mean([v.coordinates[:3] for v in all_vertices], axis=0)
-        
-        center_x = center[0]
-        center_y = center[1]
-        center_z = center[2]
-
-        self.apply_transform(self.get_scaling_matrix(center_x, center_y, center_z, scale_factor))
-
-    def apply_axis_rotation_through_center(self, axis):
-        """Вращение фигуры вокруг оси, проходящей через ее центр"""
-        # Находим центр многогранника
-        all_vertices = []
-        for polygon in self.polyhedron.polygons:
-            all_vertices.extend(polygon.vertices)
-
-        center = np.mean([v.coordinates[:3] for v in all_vertices], axis=0)
-        
-        # Угол вращения (в радианах)
-        angle = math.radians(30)  # 30 градусов
-        
-        # Создаем прямую через центр многогранника, параллельную выбранной оси
-        if axis == 'x':
-            # Прямая параллельная оси X через центр
-            p1 = np.array([center[0] - 100, center[1], center[2]])
-            p2 = np.array([center[0] + 100, center[1], center[2]])
-        elif axis == 'y':
-            # Прямая параллельная оси Y через центр
-            p1 = np.array([center[0], center[1] - 100, center[2]])
-            p2 = np.array([center[0], center[1] + 100, center[2]])
-        elif axis == 'z':
-            # Прямая параллельная оси Z через центр
-            p1 = np.array([center[0], center[1], center[2] - 100])
-            p2 = np.array([center[0], center[1], center[2] + 100])
-        
-        # Создаем матрицу вращения вокруг этой прямой
-        matrix = self.get_rotation_around_line(p1, p2, angle)
-        self.apply_transform(matrix)
-
-    def apply_arbitrary_rotation(self):
-        """Вращение фигуры вокруг произвольной прямой, заданной двумя точками"""
-        try:
-            # Получаем координаты точек и угол из полей ввода
-            p1 = np.array([float(self.p1_x.get()), float(self.p1_y.get()), float(self.p1_z.get())])
-            p2 = np.array([float(self.p2_x.get()), float(self.p2_y.get()), float(self.p2_z.get())])
-            angle = math.radians(float(self.angle_entry.get()))
-            
-            # Создаем матрицу вращения вокруг произвольной прямой
-            matrix = self.get_rotation_around_line(p1, p2, angle)
-            self.apply_transform(matrix)
-        except ValueError:
-            print("Ошибка: проверьте правильность введенных данных")
-
-    def get_rotation_around_line(self, p1, p2, angle):
-        # Вращение вокруг произвольной прямой, заданной двумя точками p1 и p2
-        
-        # Вектор направления прямой
-        v = p2 - p1
-        v_length = np.linalg.norm(v)
-        if v_length == 0:
-            return np.eye(4)  # Если точки совпадают, возвращаем единичную матрицу
-        v = v / v_length  # Нормализуем
-        
-        # Перенос в начало координат (к точке p1)
-        T = self.get_translation_matrix(-p1[0], -p1[1], -p1[2])
-        
-        # Вращение, чтобы ось совпала с осью Z
-        # Вычисляем углы для совмещения оси с Z
-        if abs(v[2]) < 1e-10:  # Если ось перпендикулярна Z
-            if abs(v[0]) < 1e-10 and abs(v[1]) < 1e-10:
-                # Ось уже совпадает с Z
-                R_align = np.eye(4)
-            else:
-                # Поворачиваем вокруг оси Y, затем вокруг оси Z
-                alpha = math.atan2(v[1], v[0])
-                R_alpha = np.array([
-                    [math.cos(alpha), -math.sin(alpha), 0, 0],
-                    [math.sin(alpha), math.cos(alpha), 0, 0],
-                    [0, 0, 1, 0],
-                    [0, 0, 0, 1]
-                ])
-                
-                # После поворота на alpha, вектор v становится (sqrt(v[0]^2+v[1]^2), 0, v[2])
-                v_temp = np.dot(R_alpha[:3, :3], v)
-                beta = math.atan2(v_temp[0], v_temp[2])
-                R_beta = np.array([
-                    [math.cos(beta), 0, math.sin(beta), 0],
-                    [0, 1, 0, 0],
-                    [-math.sin(beta), 0, math.cos(beta), 0],
-                    [0, 0, 0, 1]
-                ])
-                
-                R_align = np.dot(R_beta, R_alpha)
-        else:
-            # Ось не перпендикулярна Z
-            alpha = math.atan2(v[1], v[0])
-            R_alpha = np.array([
-                [math.cos(alpha), -math.sin(alpha), 0, 0],
-                [math.sin(alpha), math.cos(alpha), 0, 0],
-                [0, 0, 1, 0],
-                [0, 0, 0, 1]
-            ])
-            
-            v_temp = np.dot(R_alpha[:3, :3], v)
-            beta = math.atan2(v_temp[0], v_temp[2])
-            R_beta = np.array([
-                [math.cos(beta), 0, math.sin(beta), 0],
-                [0, 1, 0, 0],
-                [-math.sin(beta), 0, math.cos(beta), 0],
-                [0, 0, 0, 1]
-            ])
-            
-            R_align = np.dot(R_beta, R_alpha)
-        
-        # Вращение вокруг оси Z на заданный угол
-        R_z = np.array([
-            [math.cos(angle), -math.sin(angle), 0, 0],
-            [math.sin(angle), math.cos(angle), 0, 0],
+    def get_rotation_matrix_z(self, angle):
+        cos_a, sin_a = math.cos(angle), math.sin(angle)
+        return np.array([
+            [cos_a, -sin_a, 0, 0],
+            [sin_a, cos_a, 0, 0],
             [0, 0, 1, 0],
             [0, 0, 0, 1]
         ])
-        
-        # Обратные преобразования
-        R_align_inv = np.linalg.inv(R_align)
-        T_inv = self.get_translation_matrix(p1[0], p1[1], p1[2])
-        
-        # Комбинируем все преобразования: T_inv * R_align_inv * R_z * R_align * T
-        temp = np.dot(R_align, T)
-        temp = np.dot(R_z, temp)
-        temp = np.dot(R_align_inv, temp)
-        result = np.dot(T_inv, temp)
-        
-        return result
 
-    def apply_transform(self, matrix):
+    def get_scaling_matrix(self, sx, sy, sz):
+        return np.array([
+            [sx, 0, 0, 0],
+            [0, sy, 0, 0],
+            [0, 0, sz, 0],
+            [0, 0, 0, 1]
+        ])
+
+    def get_reflection_matrix(self, plane):
+        if plane == 'xy':
+            return np.array([[1, 0, 0, 0], [0, 1, 0, 0], [0, 0, -1, 0], [0, 0, 0, 1]])
+        elif plane == 'xz':
+            return np.array([[1, 0, 0, 0], [0, -1, 0, 0], [0, 0, 1, 0], [0, 0, 0, 1]])
+        elif plane == 'yz':
+            return np.array([[-1, 0, 0, 0], [0, 1, 0, 0], [0, 0, 1, 0], [0, 0, 0, 1]])
+
+    def get_rotation_around_axis(self, axis_vector, angle, center):
+        u = axis_vector / np.linalg.norm(axis_vector)
+        ux, uy, uz = u
+        
+        cos_a = math.cos(angle)
+        sin_a = math.sin(angle)
+        one_minus_cos = 1 - cos_a
+        
+        R = np.array([
+            [cos_a + ux*ux*one_minus_cos, ux*uy*one_minus_cos - uz*sin_a, ux*uz*one_minus_cos + uy*sin_a, 0],
+            [uy*ux*one_minus_cos + uz*sin_a, cos_a + uy*uy*one_minus_cos, uy*uz*one_minus_cos - ux*sin_a, 0],
+            [uz*ux*one_minus_cos - uy*sin_a, uz*uy*one_minus_cos + ux*sin_a, cos_a + uz*uz*one_minus_cos, 0],
+            [0, 0, 0, 1]
+        ])
+        
+        T = self.get_translation_matrix(-center[0], -center[1], -center[2])
+        T_inv = self.get_translation_matrix(center[0], center[1], center[2])
+        
+        return np.dot(T_inv, np.dot(R, T))
+
+    def apply_translation(self):
+        if not self.polyhedron:
+            return
+            
+        dx = float(self.dx_entry.get() or 0)
+        dy = float(self.dy_entry.get() or 0)
+        dz = float(self.dz_entry.get() or 0)
+        
+        matrix = self.get_translation_matrix(dx, dy, dz)
         self.polyhedron.transform(matrix)
         self.render()
 
-    def get_translation_matrix(self, dx, dy, dz):
-        return np.array([[1, 0, 0, dx],
-                         [0, 1, 0, dy],
-                         [0, 0, 1, dz],
-                         [0, 0, 0, 1]])
-
-    def get_rotation_matrix(self, center_x, center_y, center_z, angle):
-        angle_rad = math.radians(angle)
-        cos_a, sin_a = math.cos(angle_rad), math.sin(angle_rad)
+    def apply_rotation_around_point(self):
+        if not self.polyhedron:
+            return
+            
+        center_x = float(self.center_x_entry.get() or 0)
+        center_y = float(self.center_y_entry.get() or 0)
+        center_z = float(self.center_z_entry.get() or 0)
+        angle = math.radians(float(self.angle_entry.get() or 0))
         
-        # Вращение вокруг оси Z
-        return np.array([[cos_a, -sin_a, 0, center_x - center_x * cos_a + center_y * sin_a],
-                         [sin_a, cos_a, 0, center_y - center_x * sin_a - center_y * cos_a],
-                         [0, 0, 1, 0],
-                         [0, 0, 0, 1]])
-
-    def get_scaling_matrix(self, center_x, center_y, center_z, scale_factor):
-        # Масштабирование относительно точки (center_x, center_y, center_z)
-        translate_to_origin = self.get_translation_matrix(-center_x, -center_y, -center_z)
-        scale = np.array([[scale_factor, 0, 0, 0],
-                         [0, scale_factor, 0, 0],
-                         [0, 0, scale_factor, 0],
-                         [0, 0, 0, 1]])
-        translate_back = self.get_translation_matrix(center_x, center_y, center_z)
+        T = self.get_translation_matrix(-center_x, -center_y, -center_z)
+        R = self.get_rotation_matrix_z(angle)
+        T_inv = self.get_translation_matrix(center_x, center_y, center_z)
         
-        # Комбинируем преобразования
-        temp = np.dot(translate_back, scale)
-        return np.dot(temp, translate_to_origin)
+        matrix = np.dot(T_inv, np.dot(R, T))
+        self.polyhedron.transform(matrix)
+        self.render()
+
+    def apply_rotation_around_center(self, axis):
+        if not self.polyhedron:
+            return
+            
+        center = self.polyhedron.get_center()
+        angle = math.radians(30)
+        
+        if axis == 'x':
+            matrix = self.get_rotation_around_axis(np.array([1, 0, 0]), angle, center)
+        elif axis == 'y':
+            matrix = self.get_rotation_around_axis(np.array([0, 1, 0]), angle, center)
+        elif axis == 'z':
+            matrix = self.get_rotation_around_axis(np.array([0, 0, 1]), angle, center)
+            
+        self.polyhedron.transform(matrix)
+        self.render()
+
+    def apply_scaling_around_center(self):
+        if not self.polyhedron:
+            return
+            
+        scale_factor = float(self.scale_factor_entry.get() or 1.0)
+        center = self.polyhedron.get_center()
+        
+        T = self.get_translation_matrix(-center[0], -center[1], -center[2])
+        S = self.get_scaling_matrix(scale_factor, scale_factor, scale_factor)
+        T_inv = self.get_translation_matrix(center[0], center[1], center[2])
+        
+        matrix = np.dot(T_inv, np.dot(S, T))
+        self.polyhedron.transform(matrix)
+        self.render()
+
+    def apply_scaling_around_point(self):
+        if not self.polyhedron:
+            return
+            
+        scale_factor = float(self.scale_factor_entry.get() or 1.0)
+        center_x = float(self.center_x_entry.get() or 0)
+        center_y = float(self.center_y_entry.get() or 0)
+        center_z = float(self.center_z_entry.get() or 0)
+        
+        T = self.get_translation_matrix(-center_x, -center_y, -center_z)
+        S = self.get_scaling_matrix(scale_factor, scale_factor, scale_factor)
+        T_inv = self.get_translation_matrix(center_x, center_y, center_z)
+        
+        matrix = np.dot(T_inv, np.dot(S, T))
+        self.polyhedron.transform(matrix)
+        self.render()
+
+    def apply_reflection(self, plane):
+        if not self.polyhedron:
+            return
+            
+        # Получаем центр многогранника
+        center = self.polyhedron.get_center()
+        
+        T_to_origin = self.get_translation_matrix(-center[0], -center[1], -center[2])
+        R = self.get_reflection_matrix(plane)
+        T_back = self.get_translation_matrix(center[0], center[1], center[2])
+        
+        # Комбинированная матрица: T_back * R * T_to_origin
+        matrix = np.dot(T_back, np.dot(R, T_to_origin))
+        
+        self.polyhedron.transform(matrix)
+        self.render()
+
+    def apply_arbitrary_rotation(self):
+        if not self.polyhedron:
+            return
+            
+        try:
+            p1 = np.array([float(self.p1_x.get()), float(self.p1_y.get()), float(self.p1_z.get())])
+            p2 = np.array([float(self.p2_x.get()), float(self.p2_y.get()), float(self.p2_z.get())])
+            angle = math.radians(float(self.arbitrary_angle_entry.get()))
+            
+            axis_vector = p2 - p1
+            if np.linalg.norm(axis_vector) < 1e-10:
+                return
+                
+            matrix = self.get_rotation_around_axis(axis_vector, angle, p1)
+            self.polyhedron.transform(matrix)
+            self.render()
+            
+        except ValueError:
+            print("Ошибка: проверьте правильность введенных данных")
+
+    def is_polygon_visible(self, polygon):
+        if len(polygon.vertices) < 3:
+            return False
+            
+        normal = polygon.get_normal()
+        
+        # Вектор от камеры к центру грани
+        center = np.mean([v.coordinates[:3] for v in polygon.vertices], axis=0)
+        view_vector = center - np.array([0, 0, -1000])  # Камера находится в (0, 0, -1000)
+        
+        # Если скалярное произведение положительное, грань видима
+        return np.dot(normal, view_vector) > 0
 
     def render(self):
         self.canvas.delete("all")
         
-        for polygon in self.polyhedron.polygons:
-            coords = []
+        if not self.polyhedron:
+            return
+            
+        # Сортируем полигоны по глубине (от дальних к ближним)
+        sorted_polygons = sorted(self.polyhedron.polygons, 
+                               key=lambda p: p.get_center_z(), 
+                               reverse=True)
+        
+        for polygon in sorted_polygons:
+                
+            # Проецируем все вершины полигона
+            projected_points = []
             for p in polygon.vertices:
                 x, y, z = p.coordinates[:3]
                 
-                # Применяем проекцию
                 if self.projection_type == 'perspective':
-                    # Перспективная проекция
                     d = 500  # расстояние до плоскости проекции
                     if z + d != 0:
                         x_proj = x * d / (z + d)
                         y_proj = y * d / (z + d)
                     else:
                         x_proj, y_proj = x, y
-                else:
-                    # Аксонометрическая проекция
+                else:  # аксонометрическая
                     x_proj = x - z * 0.5
                     y_proj = y - z * 0.5
                 
-                coords.extend([x_proj + 300, y_proj + 300])  # Центрируем на холсте
+                projected_points.append((x_proj + 300, y_proj + 300))
             
-            if len(coords) >= 6:  # Минимум 3 точки для полигона
-                self.canvas.create_polygon(coords, outline="black", fill="lightblue", width=2)
+            # Рисуем полигон только если есть хотя бы 3 точки
+            if len(projected_points) >= 3:
+                # Создаем список координат для полигона
+                coords = []
+                for point in projected_points:
+                    coords.extend(point)
+                
+                # Рисуем заполненный полигон
+                self.canvas.create_polygon(
+                    coords, 
+                    outline="black", 
+                    fill="lightblue", 
+                    width=2,
+                    smooth=False  # Отключаем сглаживание для четких граней
+                )
 
 if __name__ == "__main__":
     root = tk.Tk()
