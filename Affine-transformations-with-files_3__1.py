@@ -112,11 +112,14 @@ class Polyhedron:
 class SurfaceGenerator:
     @staticmethod
     def generate_surface(func_str, x_range, y_range, subdivisions):
+        """Генерирует поверхность по функции f(x, y) = z"""
         try:
+            # Создаем сетку точек
             x_min, x_max = x_range
             y_min, y_max = y_range
             n = subdivisions
             
+            # Создаем регулярную сетку
             x_vals = np.linspace(x_min, x_max, n)
             y_vals = np.linspace(y_min, y_max, n)
             
@@ -162,6 +165,7 @@ class SurfaceGenerator:
     
     @staticmethod
     def evaluate_function(func_str, x, y):
+        """Вычисляет значение функции f(x, y)"""
         # Заменяем математические функции на их numpy аналоги
         func_str = func_str.replace('sin', 'np.sin')
         func_str = func_str.replace('cos', 'np.cos')
@@ -174,6 +178,74 @@ class SurfaceGenerator:
         
         # Вычисляем значение
         return eval(func_str, {'np': np, 'x': x, 'y': y})
+
+class RotationFigureGenerator:
+    @staticmethod
+    def generate_rotation_figure(generatrix_points, axis, subdivisions):
+        """
+        Генерирует фигуру вращения
+        
+        Args:
+            generatrix_points: список точек образующей [(x, y), ...]
+            axis: ось вращения ('x', 'y', 'z')
+            subdivisions: количество разбиений
+        """
+        try:
+            vertices = []
+            faces = []
+            
+            # Угол поворота между сегментами
+            angle_step = 2 * math.pi / subdivisions
+            
+            # Создаем вершины
+            for i in range(subdivisions):
+                angle = i * angle_step
+                cos_a = math.cos(angle)
+                sin_a = math.sin(angle)
+                
+                for point in generatrix_points:
+                    x, y = point
+                    
+                    if axis == 'x':
+                        # Вращение вокруг оси X
+                        new_x = x
+                        new_y = y * cos_a
+                        new_z = y * sin_a
+                    elif axis == 'y':
+                        # Вращение вокруг оси Y
+                        new_x = x * cos_a
+                        new_y = y
+                        new_z = x * sin_a
+                    elif axis == 'z':
+                        # Вращение вокруг оси Z
+                        new_x = x * cos_a - y * sin_a
+                        new_y = x * sin_a + y * cos_a
+                        new_z = 0
+                    
+                    vertices.append(Point(new_x, new_y, new_z))
+            
+            # Создаем грани
+            n_points = len(generatrix_points)
+            for i in range(subdivisions):
+                current_slice = i
+                next_slice = (i + 1) % subdivisions
+                
+                for j in range(n_points - 1):
+                    # Индексы вершин для текущего квадрата
+                    v00 = current_slice * n_points + j
+                    v01 = current_slice * n_points + j + 1
+                    v10 = next_slice * n_points + j
+                    v11 = next_slice * n_points + j + 1
+                    
+                    # Создаем два треугольника для квадрата
+                    faces.append([v00, v01, v11])
+                    faces.append([v00, v11, v10])
+            
+            polygons = Polygon.polygons_from_vertices(vertices, faces)
+            return Polyhedron(polygons)
+            
+        except Exception as e:
+            raise Exception(f"Ошибка генерации фигуры вращения: {e}")
 
 class Application:
     def __init__(self, root):
@@ -194,6 +266,37 @@ class Application:
     def create_controls_panel(self):
         controls_frame = tk.Frame(self.root)
         controls_frame.pack(side=tk.RIGHT, fill=tk.Y, padx=10, pady=10)
+        
+        # Панель построения фигуры вращения
+        rotation_frame = tk.LabelFrame(controls_frame, text="Построение фигуры вращения", padx=5, pady=5)
+        rotation_frame.pack(fill=tk.X, pady=(0, 10))
+        
+        # Образующая
+        tk.Label(rotation_frame, text="Образующая (x,y через пробел):").pack(anchor=tk.W)
+        self.generatrix_entry = tk.Text(rotation_frame, width=20, height=4)
+        self.generatrix_entry.insert("1.0", "0 0\n1 0\n1 2\n0.5 3\n0 2")
+        self.generatrix_entry.pack(fill=tk.X, pady=2)
+        
+        # Ось вращения
+        axis_frame = tk.Frame(rotation_frame)
+        axis_frame.pack(fill=tk.X, pady=2)
+        tk.Label(axis_frame, text="Ось вращения:").pack(side=tk.LEFT)
+        self.axis_var = tk.StringVar(value="y")
+        tk.Radiobutton(axis_frame, text="X", variable=self.axis_var, value="x").pack(side=tk.LEFT)
+        tk.Radiobutton(axis_frame, text="Y", variable=self.axis_var, value="y").pack(side=tk.LEFT)
+        tk.Radiobutton(axis_frame, text="Z", variable=self.axis_var, value="z").pack(side=tk.LEFT)
+        
+        # Количество разбиений
+        subdiv_frame = tk.Frame(rotation_frame)
+        subdiv_frame.pack(fill=tk.X, pady=2)
+        tk.Label(subdiv_frame, text="Разбиений:").pack(side=tk.LEFT)
+        self.rotation_subdivisions_entry = tk.Entry(subdiv_frame, width=5)
+        self.rotation_subdivisions_entry.insert(0, "20")
+        self.rotation_subdivisions_entry.pack(side=tk.LEFT, padx=5)
+        
+        # Кнопка построения фигуры вращения
+        tk.Button(rotation_frame, text="Построить фигуру вращения", 
+                 command=self.generate_rotation_figure).pack(fill=tk.X, pady=5)
         
         # Панель построения поверхности
         surface_frame = tk.LabelFrame(controls_frame, text="Построение поверхности", padx=5, pady=5)
@@ -404,6 +507,44 @@ class Application:
         tk.Label(angle_frame, text="°").pack(side=tk.LEFT)
         
         tk.Button(frame, text="Применить вращение", command=self.apply_arbitrary_rotation).pack(pady=5)
+
+    def generate_rotation_figure(self):
+        """Генерирует фигуру вращения по заданной образующей"""
+        try:
+            # Читаем точки образующей
+            generatrix_text = self.generatrix_entry.get("1.0", tk.END).strip()
+            lines = generatrix_text.split('\n')
+            
+            generatrix_points = []
+            for line in lines:
+                line = line.strip()
+                if line:
+                    parts = line.split()
+                    if len(parts) >= 2:
+                        x = float(parts[0])
+                        y = float(parts[1])
+                        generatrix_points.append((x, y))
+            
+            if len(generatrix_points) < 2:
+                messagebox.showerror("Ошибка", "Образующая должна содержать хотя бы 2 точки")
+                return
+            
+            axis = self.axis_var.get()
+            subdivisions = int(self.rotation_subdivisions_entry.get())
+            
+            if subdivisions < 3:
+                messagebox.showerror("Ошибка", "Количество разбиений должно быть не менее 3")
+                return
+            
+            self.polyhedron = RotationFigureGenerator.generate_rotation_figure(
+                generatrix_points, axis, subdivisions
+            )
+            self.center_polyhedron()
+            self.render()
+            messagebox.showinfo("Успех", f"Фигура вращения построена: {len(self.polyhedron.polygons)} полигонов")
+            
+        except Exception as e:
+            messagebox.showerror("Ошибка", f"Не удалось построить фигуру вращения: {e}")
 
     def generate_surface(self):
         """Генерирует поверхность по заданной функции"""
@@ -711,6 +852,10 @@ class Application:
                                reverse=True)
         
         for polygon in sorted_polygons:
+            # Временно отключаем проверку видимости для отладки
+            # if not self.is_polygon_visible(polygon):
+            #     continue
+                
             projected_points = []
             for p in polygon.vertices:
                 x, y, z = p.coordinates[:3]
