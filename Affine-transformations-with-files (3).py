@@ -206,7 +206,7 @@ class Application:
         # Функция
         tk.Label(surface_frame, text="f(x, y) =").pack(anchor=tk.W)
         self.func_entry = tk.Entry(surface_frame, width=20)
-        self.func_entry.insert(0, "np.sin(np.sqrt(x**2 + y**2))")
+        self.func_entry.insert(0, "(x**2 + y**2) / 10")
         self.func_entry.pack(fill=tk.X, pady=2)
         
         # Диапазоны
@@ -215,22 +215,22 @@ class Application:
         
         tk.Label(range_frame, text="X:").grid(row=0, column=0, sticky=tk.W)
         self.x0_entry = tk.Entry(range_frame, width=5)
-        self.x0_entry.insert(0, "-5")
+        self.x0_entry.insert(0, "-6")
         self.x0_entry.grid(row=0, column=1, padx=2)
         
         tk.Label(range_frame, text="до").grid(row=0, column=2)
         self.x1_entry = tk.Entry(range_frame, width=5)
-        self.x1_entry.insert(0, "5")
+        self.x1_entry.insert(0, "6")
         self.x1_entry.grid(row=0, column=3, padx=2)
         
         tk.Label(range_frame, text="Y:").grid(row=1, column=0, sticky=tk.W)
         self.y0_entry = tk.Entry(range_frame, width=5)
-        self.y0_entry.insert(0, "-5")
+        self.y0_entry.insert(0, "-6")
         self.y0_entry.grid(row=1, column=1, padx=2)
         
         tk.Label(range_frame, text="до").grid(row=1, column=2)
         self.y1_entry = tk.Entry(range_frame, width=5)
-        self.y1_entry.insert(0, "5")
+        self.y1_entry.insert(0, "6")
         self.y1_entry.grid(row=1, column=3, padx=2)
         
         # Количество разбиений
