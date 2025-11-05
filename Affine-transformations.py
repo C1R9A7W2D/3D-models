@@ -545,7 +545,7 @@ class Application:
         if not self.polyhedron:
             return
             
-        center = self.polyhedron.get_center()
+        center = self.polyhedron.get_center() #среднее арифметическое всех вершин многогранника
         angle = math.radians(30)
         
         if axis == 'x':
