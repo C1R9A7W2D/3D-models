@@ -588,6 +588,8 @@ class Application:
             for i in range(n):
                 p1 = projected_points[i]
                 p2 = projected_points[(i + 1) % n]
+                op1 = original_points[i]
+                op2 = original_points[(i + 1) % n]
                 
                 # Проверяем, пересекает ли ребро сканирующую строку
                 if (p1[1] <= y and p2[1] > y) or (p2[1] <= y and p1[1] > y):
@@ -595,7 +597,8 @@ class Application:
                     if p2[1] != p1[1]:
                         t = (y - p1[1]) / (p2[1] - p1[1])
                         x_intersect = p1[0] + t * (p2[0] - p1[0])
-                        intersections.append(x_intersect)
+                        z_intersect = op1[2] + t * (op2[2] - op1[2])
+                        intersections.append((x_intersect, z_intersect))
             
             # Сортируем точки пересечения
             intersections.sort()
@@ -603,19 +606,24 @@ class Application:
             # Заполняем пиксели между парами пересечений
             for i in range(0, len(intersections), 2):
                 if i + 1 < len(intersections):
-                    x_start = int(intersections[i])
-                    x_end = int(intersections[i + 1])
+                    x_start = int(intersections[i][0])
+                    x_end = int(intersections[i + 1][0])
+                    z_start = intersections[i][1]
+                    z_end = intersections[i + 1][1]
                     
                     for x in range(x_start, x_end + 1):
                         if 0 <= x < self.z_buffer.width:
                             # Интерполируем z-координату
-                            z = self.interpolate_z(x, y, projected_points, original_points)
+                            z = self.interpolate_z(x, x_start, x_end, z_start, z_end)
                             self.z_buffer.update(x, y, z, color)
 
-    def interpolate_z(self, x, y, projected_points, original_points):
-        # Простая интерполяция z-координаты по барицентрическим координатам
-        # Для простоты используем среднее значение z для всех вершин
-        return np.mean([p[2] for p in original_points])
+    def interpolate_z(self, x, x_start, x_end, z_start, z_end):
+        if (x_start == x_end):
+            return (z_start + z_end) / 2
+        
+        t = (x - x_start) / (x_end - x_start)
+        z_intersect = z_start + t * (z_end - z_start)
+        return z_intersect
 
     def render_with_z_buffer(self):
         self.z_buffer.clear()
