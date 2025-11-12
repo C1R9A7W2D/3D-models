@@ -1,0 +1,1667 @@
+import tkinter as tk
+from tkinter import ttk, filedialog, messagebox
+import numpy as np
+import math
+
+class Point:
+    def __init__(self, x, y, z):
+        self.coordinates = np.array([x, y, z, 1.0])
+
+    def transform(self, matrix):
+        transformed_coordinates = np.dot(matrix, self.coordinates)
+        return Point(transformed_coordinates[0], transformed_coordinates[1], transformed_coordinates[2])
+
+class Polygon:
+    def __init__(self, vertices):
+        self.vertices = vertices
+
+    def transform(self, matrix):
+        self.vertices = [vertex.transform(matrix) for vertex in self.vertices]
+        
+    def get_center_z(self):
+        return np.mean([v.coordinates[2] for v in self.vertices])
+        
+    def get_center(self):
+        """Возвращает центр полигона"""
+        if not self.vertices:
+            return np.array([0, 0, 0])
+        return np.mean([v.coordinates[:3] for v in self.vertices], axis=0)
+        
+    def get_normal(self):
+        if len(self.vertices) < 3:
+            return np.array([0, 0, 1])
+            
+        # Берем первые три вершины для вычисления нормали
+        v0 = self.vertices[0].coordinates[:3]
+        v1 = self.vertices[1].coordinates[:3]
+        v2 = self.vertices[2].coordinates[:3]
+        
+        # Векторы в плоскости полигона
+        edge1 = v1 - v0
+        edge2 = v2 - v0
+        
+        # Векторное произведение дает нормаль
+        normal = np.cross(edge1, edge2)
+        
+        # Нормализуем нормаль
+        norm = np.linalg.norm(normal)
+        if norm > 0:
+            normal = normal / norm
+            
+        return normal
+
+    @staticmethod
+    def polygons_from_vertices(vertices, faces):
+        polygons = []
+        for face in faces:
+            polygon_vertices = [vertices[i] for i in face]
+            polygons.append(Polygon(polygon_vertices))
+        return polygons
+
+class Polyhedron:
+    def __init__(self, polygons):
+        self.polygons = polygons
+
+    def transform(self, matrix):
+        for polygon in self.polygons:
+            polygon.transform(matrix)
+            
+    def get_center(self):
+        all_vertices = []
+        for polygon in self.polygons:
+            all_vertices.extend(polygon.vertices)
+        
+        if not all_vertices:
+            return np.array([0, 0, 0])
+            
+        return np.mean([v.coordinates[:3] for v in all_vertices], axis=0)
+    
+    def save_to_obj(self, filename):
+        """Сохраняет полиэдр в OBJ файл"""
+        try:
+            with open(filename, 'w') as f:
+                f.write("# OBJ файл сгенерирован программой 3D моделирования\n")
+                
+                # Собираем все уникальные вершины
+                all_vertices = []
+                vertex_to_index = {}
+                current_index = 1
+                
+                for polygon in self.polygons:
+                    for vertex in polygon.vertices:
+                        vertex_tuple = (vertex.coordinates[0], vertex.coordinates[1], vertex.coordinates[2])
+                        if vertex_tuple not in vertex_to_index:
+                            vertex_to_index[vertex_tuple] = current_index
+                            all_vertices.append(vertex)
+                            current_index += 1
+                
+                # Записываем вершины
+                for vertex in all_vertices:
+                    x, y, z = vertex.coordinates[:3]
+                    f.write(f"v {x:.6f} {y:.6f} {z:.6f}\n")
+                
+                # Записываем грани
+                for polygon in self.polygons:
+                    face_indices = []
+                    for vertex in polygon.vertices:
+                        vertex_tuple = (vertex.coordinates[0], vertex.coordinates[1], vertex.coordinates[2])
+                        face_indices.append(str(vertex_to_index[vertex_tuple]))
+                    
+                    if len(face_indices) >= 3:
+                        f.write(f"f {' '.join(face_indices)}\n")
+                
+            return True
+        except Exception as e:
+            print(f"Ошибка сохранения OBJ: {e}")
+            return False
+
+class Camera:
+    def __init__(self):
+        # Позиция камеры в мировых координатах
+        self.position = np.array([0, 0, 500])
+        # Точка, на которую смотрит камера
+        self.target = np.array([0, 0, 0])
+        # Вектор "вверх" для камеры
+        self.up = np.array([0, 1, 0])
+        # Угол обзора (в градусах)
+        self.fov = 60
+        # Ближняя и дальняя плоскости отсечения
+        self.near_plane = 0.1
+        self.far_plane = 1000
+        # Текущий угол вращения камеры вокруг объекта
+        self.rotation_angle = 0
+        # Радиус вращения камеры вокруг объекта
+        self.orbit_radius = 500
+        # Скорость вращения камеры (градусов в кадр)
+        self.rotation_speed = 1
+        # Флаг вращения камеры
+        self.is_rotating = False
+        
+    def get_view_matrix(self):
+        """Возвращает матрицу вида камеры"""
+        # Вектор направления (от камеры к цели)
+        direction = self.target - self.position
+        direction = direction / np.linalg.norm(direction)
+        
+        # Вектор "вправо"
+        right = np.cross(direction, self.up)
+        right = right / np.linalg.norm(right)
+        
+        # Корректируем вектор "вверх"
+        up = np.cross(right, direction)
+        up = up / np.linalg.norm(up)
+        
+        # Создаем матрицу вида
+        view_matrix = np.eye(4)
+        
+        # Первая строка - ось X (право)
+        view_matrix[0, 0] = right[0]
+        view_matrix[0, 1] = right[1]
+        view_matrix[0, 2] = right[2]
+        
+        # Вторая строка - ось Y (вверх)
+        view_matrix[1, 0] = up[0]
+        view_matrix[1, 1] = up[1]
+        view_matrix[1, 2] = up[2]
+        
+        # Третья строка - ось Z (направление, но инвертированное)
+        view_matrix[2, 0] = -direction[0]
+        view_matrix[2, 1] = -direction[1]
+        view_matrix[2, 2] = -direction[2]
+        
+        # Трансляция (позиция камеры)
+        view_matrix[0, 3] = -np.dot(right, self.position)
+        view_matrix[1, 3] = -np.dot(up, self.position)
+        view_matrix[2, 3] = np.dot(direction, self.position)
+        
+        return view_matrix
+    
+    def get_projection_matrix(self, aspect_ratio):
+        """Возвращает матрицу перспективной проекции"""
+        fov_rad = math.radians(self.fov)
+        f = 1.0 / math.tan(fov_rad / 2.0)
+        
+        projection_matrix = np.zeros((4, 4))
+        
+        projection_matrix[0, 0] = f / aspect_ratio
+        projection_matrix[1, 1] = f
+        projection_matrix[2, 2] = (self.far_plane + self.near_plane) / (self.near_plane - self.far_plane)
+        projection_matrix[2, 3] = (2 * self.far_plane * self.near_plane) / (self.near_plane - self.far_plane)
+        projection_matrix[3, 2] = -1
+        
+        return projection_matrix
+    
+    def update_orbit(self):
+        """Обновляет позицию камеры для вращения вокруг цели"""
+        if not self.is_rotating:
+            return
+            
+        self.rotation_angle += self.rotation_speed
+        if self.rotation_angle >= 360:
+            self.rotation_angle -= 360
+            
+        # Вычисляем новую позицию камеры на окружности
+        angle_rad = math.radians(self.rotation_angle)
+        x = self.orbit_radius * math.cos(angle_rad)
+        z = self.orbit_radius * math.sin(angle_rad)
+        
+        self.position = np.array([x, 100, z])  # Немного приподнимаем камеру
+    
+    def start_rotation(self):
+        """Запускает вращение камеры"""
+        self.is_rotating = True
+        
+    def stop_rotation(self):
+        """Останавливает вращение камеры"""
+        self.is_rotating = False
+        
+    def set_position(self, x, y, z):
+        """Устанавливает позицию камеры"""
+        self.position = np.array([x, y, z])
+        
+    def set_target(self, x, y, z):
+        """Устанавливает цель камеры"""
+        self.target = np.array([x, y, z])
+        
+    def move(self, dx, dy, dz):
+        """Перемещает камеру на указанные значения"""
+        self.position += np.array([dx, dy, dz])
+        
+    def move_forward(self, distance):
+        """Двигает камеру вперед"""
+        direction = self.target - self.position
+        direction = direction / np.linalg.norm(direction)
+        self.position += direction * distance
+        
+    def move_backward(self, distance):
+        """Двигает камеру назад"""
+        direction = self.target - self.position
+        direction = direction / np.linalg.norm(direction)
+        self.position -= direction * distance
+        
+    def move_left(self, distance):
+        """Двигает камеру влево"""
+        direction = self.target - self.position
+        direction = direction / np.linalg.norm(direction)
+        right = np.cross(direction, self.up)
+        right = right / np.linalg.norm(right)
+        self.position -= right * distance
+        
+    def move_right(self, distance):
+        """Двигает камеру вправо"""
+        direction = self.target - self.position
+        direction = direction / np.linalg.norm(direction)
+        right = np.cross(direction, self.up)
+        right = right / np.linalg.norm(right)
+        self.position += right * distance
+        
+    def move_up(self, distance):
+        """Двигает камеру вверх"""
+        self.position += self.up * distance
+        
+    def move_down(self, distance):
+        """Двигает камеру вниз"""
+        self.position -= self.up * distance
+        
+    def rotate_around_target(self, angle_x, angle_y):
+        """Вращает камеру вокруг цели"""
+        # Вычисляем вектор от цели к камере
+        camera_vector = self.position - self.target
+        
+        # Вращение вокруг оси Y (вертикальное)
+        cos_y = math.cos(angle_y)
+        sin_y = math.sin(angle_y)
+        y_rotation_matrix = np.array([
+            [cos_y, 0, sin_y],
+            [0, 1, 0],
+            [-sin_y, 0, cos_y]
+        ])
+        
+        # Вращение вокруг оси X (горизонтальное)
+        cos_x = math.cos(angle_x)
+        sin_x = math.sin(angle_x)
+        x_rotation_matrix = np.array([
+            [1, 0, 0],
+            [0, cos_x, -sin_x],
+            [0, sin_x, cos_x]
+        ])
+        
+        # Применяем вращения
+        camera_vector = np.dot(y_rotation_matrix, camera_vector)
+        camera_vector = np.dot(x_rotation_matrix, camera_vector)
+        
+        # Обновляем позицию камеры
+        self.position = self.target + camera_vector
+        
+        # Обновляем вектор "вверх" для камеры
+        self.up = np.array([0, 1, 0])  # Пока оставляем фиксированным
+
+class SurfaceGenerator:
+    @staticmethod
+    def generate_surface(func_str, x_range, y_range, subdivisions):
+        """Генерирует поверхность по функции f(x, y) = z"""
+        try:
+            # Создаем сетку точек
+            x_min, x_max = x_range
+            y_min, y_max = y_range
+            n = subdivisions
+            
+            # Создаем регулярную сетку
+            x_vals = np.linspace(x_min, x_max, n)
+            y_vals = np.linspace(y_min, y_max, n)
+            
+            vertices = []
+            faces = []
+            
+            # Создаем вершины
+            vertex_index = 0
+            vertex_grid = {}
+            
+            for i, x in enumerate(x_vals):
+                for j, y in enumerate(y_vals):
+                    try:
+                        # Вычисляем z по функции
+                        z = SurfaceGenerator.evaluate_function(func_str, x, y)
+                        vertices.append(Point(x, y, z))
+                        vertex_grid[(i, j)] = vertex_index
+                        vertex_index += 1
+                    except:
+                        # Если вычисление не удалось, используем 0
+                        vertices.append(Point(x, y, 0))
+                        vertex_grid[(i, j)] = vertex_index
+                        vertex_index += 1
+            
+            # Создаем грани (квадраты из двух треугольников)
+            for i in range(n - 1):
+                for j in range(n - 1):
+                    # Индексы вершин текущего квадрата
+                    v00 = vertex_grid[(i, j)]
+                    v01 = vertex_grid[(i, j + 1)]
+                    v10 = vertex_grid[(i + 1, j)]
+                    v11 = vertex_grid[(i + 1, j + 1)]
+                    
+                    # Два треугольника, образующих квадрат
+                    faces.append([v00, v01, v11])  # Первый треугольник
+                    faces.append([v00, v11, v10])  # Второй треугольник
+            
+            polygons = Polygon.polygons_from_vertices(vertices, faces)
+            return Polyhedron(polygons)
+            
+        except Exception as e:
+            raise Exception(f"Ошибка генерации поверхности: {e}")
+    
+    @staticmethod
+    def evaluate_function(func_str, x, y):
+        """Вычисляет значение функции f(x, y)"""
+        # Заменяем математические функции на их numpy аналоги
+        func_str = func_str.replace('sin', 'np.sin')
+        func_str = func_str.replace('cos', 'np.cos')
+        func_str = func_str.replace('tan', 'np.tan')
+        func_str = func_str.replace('exp', 'np.exp')
+        func_str = func_str.replace('log', 'np.log')
+        func_str = func_str.replace('sqrt', 'np.sqrt')
+        func_str = func_str.replace('pi', 'np.pi')
+        func_str = func_str.replace('e', 'np.e')
+        
+        # Вычисляем значение
+        return eval(func_str, {'np': np, 'x': x, 'y': y})
+
+class RotationFigureGenerator:
+    @staticmethod
+    def generate_rotation_figure(generatrix_points, axis, subdivisions):
+        """
+        Генерирует фигуру вращения
+        
+        Args:
+            generatrix_points: список точек образующей [(x, y), ...]
+            axis: ось вращения ('x', 'y', 'z')
+            subdivisions: количество разбиений
+        """
+        try:
+            vertices = []
+            faces = []
+            
+            # Угол поворота между сегментами
+            angle_step = 2 * math.pi / subdivisions
+            
+            # Создаем вершины
+            for i in range(subdivisions):
+                angle = i * angle_step
+                cos_a = math.cos(angle)
+                sin_a = math.sin(angle)
+                
+                for point in generatrix_points:
+                    x, y = point
+                    
+                    if axis == 'x':
+                        # Вращение вокруг оси X
+                        new_x = x
+                        new_y = y * cos_a
+                        new_z = y * sin_a
+                    elif axis == 'y':
+                        # Вращение вокруг оси Y
+                        new_x = x * cos_a
+                        new_y = y
+                        new_z = x * sin_a
+                    elif axis == 'z':
+                        # Вращение вокруг оси Z
+                        new_x = x * cos_a - y * sin_a
+                        new_y = x * sin_a + y * cos_a
+                        new_z = 0
+                    
+                    vertices.append(Point(new_x, new_y, new_z))
+            
+            # Создаем грани
+            n_points = len(generatrix_points)
+            for i in range(subdivisions):
+                current_slice = i
+                next_slice = (i + 1) % subdivisions
+                
+                for j in range(n_points - 1):
+                    # Индексы вершин для текущего квадрата
+                    v00 = current_slice * n_points + j
+                    v01 = current_slice * n_points + j + 1
+                    v10 = next_slice * n_points + j
+                    v11 = next_slice * n_points + j + 1
+                    
+                    # Создаем два треугольника для квадрата
+                    faces.append([v00, v01, v11])
+                    faces.append([v00, v11, v10])
+            
+            polygons = Polygon.polygons_from_vertices(vertices, faces)
+            return Polyhedron(polygons)
+            
+        except Exception as e:
+            raise Exception(f"Ошибка генерации фигуры вращения: {e}")
+
+class Application:
+    def __init__(self, root):
+        self.root = root
+        self.root.title("3D Polyhedra - Камера и отсечение нелицевых граней")
+        self.root.geometry("1400x900")  # Увеличил размер окна
+        
+        # Создаем панель для разделения окна
+        paned_window = ttk.PanedWindow(self.root, orient=tk.HORIZONTAL)
+        paned_window.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
+        
+        # Левая панель - холст
+        canvas_frame = ttk.Frame(paned_window)
+        paned_window.add(canvas_frame, weight=3)  # Больший вес для холста
+        
+        self.canvas = tk.Canvas(canvas_frame, bg="white")
+        self.canvas.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
+        
+        # Правая панель - элементы управления
+        controls_frame = ttk.Frame(paned_window)
+        paned_window.add(controls_frame, weight=1)  # Меньший вес для элементов управления
+        
+        # Создаем скроллируемый фрейм для элементов управления
+        self.scroll_frame = ttk.Frame(controls_frame)
+        self.scroll_frame.pack(fill=tk.BOTH, expand=True)
+        
+        # Создаем Canvas и Scrollbar
+        self.canvas_controls = tk.Canvas(self.scroll_frame, height=800)
+        scrollbar = ttk.Scrollbar(self.scroll_frame, orient="vertical", command=self.canvas_controls.yview)
+        self.scrollable_frame = ttk.Frame(self.canvas_controls)
+        
+        self.scrollable_frame.bind(
+            "<Configure>",
+            lambda e: self.canvas_controls.configure(
+                scrollregion=self.canvas_controls.bbox("all")
+            )
+        )
+        
+        self.canvas_controls.create_window((0, 0), window=self.scrollable_frame, anchor="nw")
+        self.canvas_controls.configure(yscrollcommand=scrollbar.set)
+        
+        scrollbar.pack(side="right", fill="y")
+        self.canvas_controls.pack(side="left", fill="both", expand=True)
+        
+        self.polyhedron = None
+        self.projection_type = 'perspective'
+        self.backface_culling = True
+        self.view_vector = np.array([0, 0, -1])  # Вектор обзора (направление камеры)
+        
+        # Создаем камеру
+        self.camera = Camera()
+        self.camera_view = False  # Режим отображения с камеры
+        self.animation_id = None  # ID анимации
+        
+        # Переменные для управления камерой мышью
+        self.last_mouse_x = 0
+        self.last_mouse_y = 0
+        self.mouse_dragging = False
+        self.drag_mode = None  # 'rotate' или 'move'
+        
+        # Привязываем обработчики событий мыши
+        self.canvas.bind("<Button-1>", self.on_mouse_down)  # ЛКМ
+        self.canvas.bind("<B1-Motion>", self.on_mouse_drag)  # Перетаскивание ЛКМ
+        self.canvas.bind("<ButtonRelease-1>", self.on_mouse_up)  # Отпускание ЛКМ
+        self.canvas.bind("<Button-3>", self.on_mouse_down)  # ПКМ
+        self.canvas.bind("<B3-Motion>", self.on_mouse_drag)  # Перетаскивание ПКМ
+        self.canvas.bind("<ButtonRelease-3>", self.on_mouse_up)  # Отпускание ПКМ
+        self.canvas.bind("<MouseWheel>", self.on_mouse_wheel)  # Колесо мыши (Windows)
+        self.canvas.bind("<Button-4>", self.on_mouse_wheel)  # Колесо мыши (Linux)
+        self.canvas.bind("<Button-5>", self.on_mouse_wheel)  # Колесо мыши (Linux)
+        
+        # Привязываем обработчики клавиш
+        self.root.bind("<KeyPress>", self.on_key_press)
+        
+        # Создание интерфейса
+        self.create_controls_panel()
+        self.render()
+        
+        # Запускаем цикл анимации
+        self.animate()
+
+    def create_controls_panel(self):
+        # Панель управления камерой (компактная версия)
+        camera_frame = ttk.LabelFrame(self.scrollable_frame, text="Управление камерой", padding=5)
+        camera_frame.pack(fill=tk.X, pady=(0, 5))
+        
+        # Переключение между видами
+        view_buttons_frame = ttk.Frame(camera_frame)
+        view_buttons_frame.pack(fill=tk.X, pady=2)
+        
+        ttk.Button(view_buttons_frame, text="Вид с камеры", 
+                  command=self.enable_camera_view).pack(side=tk.LEFT, padx=2, fill=tk.X, expand=True)
+        ttk.Button(view_buttons_frame, text="Обычный вид", 
+                  command=self.disable_camera_view).pack(side=tk.LEFT, padx=2, fill=tk.X, expand=True)
+        
+        # Управление вращением камеры
+        rotation_frame = ttk.Frame(camera_frame)
+        rotation_frame.pack(fill=tk.X, pady=2)
+        
+        ttk.Button(rotation_frame, text="Старт вращения", 
+                  command=self.start_camera_rotation).pack(side=tk.LEFT, padx=2, fill=tk.X, expand=True)
+        ttk.Button(rotation_frame, text="Стоп вращения", 
+                  command=self.stop_camera_rotation).pack(side=tk.LEFT, padx=2, fill=tk.X, expand=True)
+        
+        # Быстрые настройки камеры
+        quick_frame = ttk.Frame(camera_frame)
+        quick_frame.pack(fill=tk.X, pady=2)
+        
+        ttk.Button(quick_frame, text="Спереди", 
+                  command=lambda: self.set_camera_quick(0, 0, 500)).pack(side=tk.LEFT, padx=1)
+        ttk.Button(quick_frame, text="Сверху", 
+                  command=lambda: self.set_camera_quick(0, 500, 0)).pack(side=tk.LEFT, padx=1)
+        ttk.Button(quick_frame, text="Сбоку", 
+                  command=lambda: self.set_camera_quick(500, 0, 0)).pack(side=tk.LEFT, padx=1)
+        
+        # Управление камерой с клавиатуры
+        control_frame = ttk.LabelFrame(camera_frame, text="Управление камерой (WASD + мышь)", padding=5)
+        control_frame.pack(fill=tk.X, pady=2)
+        
+        controls_text = """Управление камерой:
+- ЛКМ + перетаскивание: вращение камеры
+- ПКМ + перетаскивание: перемещение камеры
+- Колесо мыши: приближение/отдаление
+- WASD: перемещение камеры
+- Q/E: движение вверх/вниз
+- R: сброс позиции камеры"""
+        
+        ttk.Label(control_frame, text=controls_text, justify=tk.LEFT).pack(anchor=tk.W)
+        
+        # Панель управления отсечением
+        culling_frame = ttk.LabelFrame(self.scrollable_frame, text="Управление отсечением", padding=5)
+        culling_frame.pack(fill=tk.X, pady=(0, 5))
+        
+        # Включение/отключение отсечения
+        self.culling_var = tk.BooleanVar(value=self.backface_culling)
+        ttk.Checkbutton(culling_frame, text="Включить отсечение нелицевых граней", 
+                       variable=self.culling_var, command=self.toggle_backface_culling).pack(anchor=tk.W, pady=2)
+        
+        # Вектор обзора
+        view_frame = ttk.Frame(culling_frame)
+        view_frame.pack(fill=tk.X, pady=2)
+        
+        ttk.Label(view_frame, text="Направление обзора:").pack(anchor=tk.W)
+        
+        # Поля для ввода вектора обзора
+        vector_frame = ttk.Frame(view_frame)
+        vector_frame.pack(fill=tk.X, pady=2)
+        
+        ttk.Label(vector_frame, text="X:").grid(row=0, column=0)
+        self.view_x_entry = ttk.Entry(vector_frame, width=5)
+        self.view_x_entry.insert(0, "0")
+        self.view_x_entry.grid(row=0, column=1, padx=2)
+        
+        ttk.Label(vector_frame, text="Y:").grid(row=0, column=2)
+        self.view_y_entry = ttk.Entry(vector_frame, width=5)
+        self.view_y_entry.insert(0, "0")
+        self.view_y_entry.grid(row=0, column=3, padx=2)
+        
+        ttk.Label(vector_frame, text="Z:").grid(row=0, column=4)
+        self.view_z_entry = ttk.Entry(vector_frame, width=5)
+        self.view_z_entry.insert(0, "-1")
+        self.view_z_entry.grid(row=0, column=5, padx=2)
+        
+        # Предустановки вектора обзора
+        presets_frame = ttk.Frame(culling_frame)
+        presets_frame.pack(fill=tk.X, pady=2)
+        
+        buttons_frame = ttk.Frame(presets_frame)
+        buttons_frame.pack(fill=tk.X, pady=2)
+        
+        ttk.Button(buttons_frame, text="Спереди", command=lambda: self.set_view_preset(0, 0, -1)).pack(side=tk.LEFT, padx=1)
+        ttk.Button(buttons_frame, text="Сзади", command=lambda: self.set_view_preset(0, 0, 1)).pack(side=tk.LEFT, padx=1)
+        ttk.Button(buttons_frame, text="Сверху", command=lambda: self.set_view_preset(0, -1, 0)).pack(side=tk.LEFT, padx=1)
+        ttk.Button(buttons_frame, text="Снизу", command=lambda: self.set_view_preset(0, 1, 0)).pack(side=tk.LEFT, padx=1)
+        
+        buttons_frame2 = ttk.Frame(presets_frame)
+        buttons_frame2.pack(fill=tk.X, pady=2)
+        
+        ttk.Button(buttons_frame2, text="Слева", command=lambda: self.set_view_preset(-1, 0, 0)).pack(side=tk.LEFT, padx=1)
+        ttk.Button(buttons_frame2, text="Справа", command=lambda: self.set_view_preset(1, 0, 0)).pack(side=tk.LEFT, padx=1)
+        ttk.Button(buttons_frame2, text="Сбоку", command=lambda: self.set_view_preset(1, 1, -1)).pack(side=tk.LEFT, padx=1)
+        
+        ttk.Button(culling_frame, text="Применить направление", 
+                  command=self.apply_view_vector).pack(pady=2)
+        
+        # Панель построения фигуры вращения
+        rotation_frame = ttk.LabelFrame(self.scrollable_frame, text="Построение фигуры вращения", padding=5)
+        rotation_frame.pack(fill=tk.X, pady=(0, 5))
+        
+        # Образующая
+        ttk.Label(rotation_frame, text="Образующая (x,y через пробел):").pack(anchor=tk.W)
+        self.generatrix_entry = tk.Text(rotation_frame, width=30, height=3)
+        self.generatrix_entry.insert("1.0", "0 0\n1 0\n1 2\n0.5 3\n0 2")
+        self.generatrix_entry.pack(fill=tk.X, pady=2)
+        
+        # Ось вращения
+        axis_frame = ttk.Frame(rotation_frame)
+        axis_frame.pack(fill=tk.X, pady=2)
+        ttk.Label(axis_frame, text="Ось вращения:").pack(side=tk.LEFT)
+        self.axis_var = tk.StringVar(value="y")
+        ttk.Radiobutton(axis_frame, text="X", variable=self.axis_var, value="x").pack(side=tk.LEFT)
+        ttk.Radiobutton(axis_frame, text="Y", variable=self.axis_var, value="y").pack(side=tk.LEFT)
+        ttk.Radiobutton(axis_frame, text="Z", variable=self.axis_var, value="z").pack(side=tk.LEFT)
+        
+        # Количество разбиений
+        subdiv_frame = ttk.Frame(rotation_frame)
+        subdiv_frame.pack(fill=tk.X, pady=2)
+        ttk.Label(subdiv_frame, text="Разбиений:").pack(side=tk.LEFT)
+        self.rotation_subdivisions_entry = ttk.Entry(subdiv_frame, width=5)
+        self.rotation_subdivisions_entry.insert(0, "20")
+        self.rotation_subdivisions_entry.pack(side=tk.LEFT, padx=5)
+        
+        # Кнопка построения фигуры вращения
+        ttk.Button(rotation_frame, text="Построить фигуру вращения", 
+                  command=self.generate_rotation_figure).pack(fill=tk.X, pady=2)
+        
+        # Панель построения поверхности
+        surface_frame = ttk.LabelFrame(self.scrollable_frame, text="Построение поверхности", padding=5)
+        surface_frame.pack(fill=tk.X, pady=(0, 5))
+        
+        # Функция
+        ttk.Label(surface_frame, text="f(x, y) =").pack(anchor=tk.W)
+        self.func_entry = ttk.Entry(surface_frame, width=30)
+        self.func_entry.insert(0, "(x**2 + y**2) / 10")
+        self.func_entry.pack(fill=tk.X, pady=2)
+        
+        # Диапазоны
+        range_frame = ttk.Frame(surface_frame)
+        range_frame.pack(fill=tk.X, pady=2)
+        
+        ttk.Label(range_frame, text="X:").grid(row=0, column=0, sticky=tk.W)
+        self.x0_entry = ttk.Entry(range_frame, width=5)
+        self.x0_entry.insert(0, "-6")
+        self.x0_entry.grid(row=0, column=1, padx=2)
+        
+        ttk.Label(range_frame, text="до").grid(row=0, column=2)
+        self.x1_entry = ttk.Entry(range_frame, width=5)
+        self.x1_entry.insert(0, "6")
+        self.x1_entry.grid(row=0, column=3, padx=2)
+        
+        ttk.Label(range_frame, text="Y:").grid(row=1, column=0, sticky=tk.W)
+        self.y0_entry = ttk.Entry(range_frame, width=5)
+        self.y0_entry.insert(0, "-6")
+        self.y0_entry.grid(row=1, column=1, padx=2)
+        
+        ttk.Label(range_frame, text="до").grid(row=1, column=2)
+        self.y1_entry = ttk.Entry(range_frame, width=5)
+        self.y1_entry.insert(0, "6")
+        self.y1_entry.grid(row=1, column=3, padx=2)
+        
+        # Количество разбиений
+        subdiv_frame = ttk.Frame(surface_frame)
+        subdiv_frame.pack(fill=tk.X, pady=2)
+        ttk.Label(subdiv_frame, text="Разбиений:").pack(side=tk.LEFT)
+        self.subdivisions_entry = ttk.Entry(subdiv_frame, width=5)
+        self.subdivisions_entry.insert(0, "20")
+        self.subdivisions_entry.pack(side=tk.LEFT, padx=5)
+        
+        # Кнопки построения поверхности
+        ttk.Button(surface_frame, text="Построить поверхность", 
+                  command=self.generate_surface).pack(fill=tk.X, pady=2)
+        
+        # Кнопки загрузки/сохранения OBJ
+        file_frame = ttk.Frame(self.scrollable_frame)
+        file_frame.pack(fill=tk.X, pady=(0, 5))
+        
+        ttk.Button(file_frame, text="Загрузить OBJ", 
+                  command=self.load_obj_file).pack(side=tk.LEFT, padx=2, fill=tk.X, expand=True)
+        ttk.Button(file_frame, text="Сохранить OBJ", 
+                  command=self.save_obj_file).pack(side=tk.LEFT, padx=2, fill=tk.X, expand=True)
+        
+        # Выбор проекции
+        proj_frame = ttk.LabelFrame(self.scrollable_frame, text="Тип проекции", padding=5)
+        proj_frame.pack(fill=tk.X, pady=(0, 5))
+        
+        self.projection_var = tk.StringVar(value=self.projection_type)
+        ttk.Radiobutton(proj_frame, text="Перспективная", 
+                       variable=self.projection_var, value='perspective',
+                       command=lambda: self.set_projection('perspective')).pack(anchor=tk.W)
+        ttk.Radiobutton(proj_frame, text="Аксонометрическая", 
+                       variable=self.projection_var, value='axonometric',
+                       command=lambda: self.set_projection('axonometric')).pack(anchor=tk.W)
+        
+        # Разделитель
+        ttk.Separator(self.scrollable_frame, orient=tk.HORIZONTAL).pack(fill=tk.X, pady=5)
+        
+        # Аффинные преобразования
+        transform_frame = ttk.LabelFrame(self.scrollable_frame, text="Аффинные преобразования", padding=5)
+        transform_frame.pack(fill=tk.X, pady=(0, 5))
+        
+        self.create_translation_controls(transform_frame)
+        self.create_rotation_controls(transform_frame)
+        self.create_scaling_controls(transform_frame)
+        self.create_reflection_controls(transform_frame)
+        self.create_arbitrary_rotation_controls(transform_frame)
+
+    def create_translation_controls(self, parent):
+        frame = ttk.LabelFrame(parent, text="Смещение", padding=5)
+        frame.pack(fill=tk.X, pady=2)
+        
+        input_frame = ttk.Frame(frame)
+        input_frame.pack(fill=tk.X)
+        
+        ttk.Label(input_frame, text="dx:").grid(row=0, column=0, padx=2)
+        self.dx_entry = ttk.Entry(input_frame, width=5)
+        self.dx_entry.insert(0, "10")
+        self.dx_entry.grid(row=0, column=1, padx=2)
+        
+        ttk.Label(input_frame, text="dy:").grid(row=0, column=2, padx=2)
+        self.dy_entry = ttk.Entry(input_frame, width=5)
+        self.dy_entry.insert(0, "10")
+        self.dy_entry.grid(row=0, column=3, padx=2)
+        
+        ttk.Label(input_frame, text="dz:").grid(row=0, column=4, padx=2)
+        self.dz_entry = ttk.Entry(input_frame, width=5)
+        self.dz_entry.insert(0, "10")
+        self.dz_entry.grid(row=0, column=5, padx=2)
+        
+        ttk.Button(frame, text="Применить смещение", command=self.apply_translation).pack(pady=2)
+
+    def create_rotation_controls(self, parent):
+        frame = ttk.LabelFrame(parent, text="Вращение", padding=5)
+        frame.pack(fill=tk.X, pady=2)
+        
+        # Вращение вокруг точки
+        point_frame = ttk.Frame(frame)
+        point_frame.pack(fill=tk.X, pady=2)
+        
+        ttk.Label(point_frame, text="Вокруг точки:").pack(side=tk.LEFT)
+        self.center_x_entry = ttk.Entry(point_frame, width=5)
+        self.center_x_entry.insert(0, "300")
+        self.center_x_entry.pack(side=tk.LEFT, padx=2)
+        
+        self.center_y_entry = ttk.Entry(point_frame, width=5)
+        self.center_y_entry.insert(0, "300")
+        self.center_y_entry.pack(side=tk.LEFT, padx=2)
+        
+        self.center_z_entry = ttk.Entry(point_frame, width=5)
+        self.center_z_entry.insert(0, "300")
+        self.center_z_entry.pack(side=tk.LEFT, padx=2)
+        
+        self.angle_entry = ttk.Entry(point_frame, width=5)
+        self.angle_entry.insert(0, "30")
+        self.angle_entry.pack(side=tk.LEFT, padx=2)
+        ttk.Label(point_frame, text="°").pack(side=tk.LEFT)
+        
+        ttk.Button(point_frame, text="Применить", command=self.apply_rotation_around_point).pack(side=tk.LEFT, padx=5)
+        
+        # Вращение вокруг центра
+        center_frame = ttk.Frame(frame)
+        center_frame.pack(fill=tk.X, pady=2)
+        
+        ttk.Label(center_frame, text="Вокруг центра:").pack(side=tk.LEFT)
+        ttk.Button(center_frame, text="X", command=lambda: self.apply_rotation_around_center('x')).pack(side=tk.LEFT, padx=2)
+        ttk.Button(center_frame, text="Y", command=lambda: self.apply_rotation_around_center('y')).pack(side=tk.LEFT, padx=2)
+        ttk.Button(center_frame, text="Z", command=lambda: self.apply_rotation_around_center('z')).pack(side=tk.LEFT, padx=2)
+
+    def create_scaling_controls(self, parent):
+        frame = ttk.LabelFrame(parent, text="Масштабирование", padding=5)
+        frame.pack(fill=tk.X, pady=2)
+        
+        scale_frame = ttk.Frame(frame)
+        scale_frame.pack(fill=tk.X)
+        
+        ttk.Label(scale_frame, text="Коэффициент:").pack(side=tk.LEFT)
+        self.scale_factor_entry = ttk.Entry(scale_frame, width=5)
+        self.scale_factor_entry.insert(0, "1.5")
+        self.scale_factor_entry.pack(side=tk.LEFT, padx=5)
+        
+        button_frame = ttk.Frame(frame)
+        button_frame.pack(fill=tk.X, pady=2)
+        
+        ttk.Button(button_frame, text="От центра", command=self.apply_scaling_around_center).pack(side=tk.LEFT, padx=2, fill=tk.X, expand=True)
+        ttk.Button(button_frame, text="От точки", command=self.apply_scaling_around_point).pack(side=tk.LEFT, padx=2, fill=tk.X, expand=True)
+
+    def create_reflection_controls(self, parent):
+        frame = ttk.LabelFrame(parent, text="Отражение", padding=5)
+        frame.pack(fill=tk.X, pady=2)
+        
+        button_frame = ttk.Frame(frame)
+        button_frame.pack()
+        
+        ttk.Button(button_frame, text="XY плоскость", command=lambda: self.apply_reflection('xy')).pack(side=tk.LEFT, padx=2)
+        ttk.Button(button_frame, text="XZ плоскость", command=lambda: self.apply_reflection('xz')).pack(side=tk.LEFT, padx=2)
+        ttk.Button(button_frame, text="YZ плоскость", command=lambda: self.apply_reflection('yz')).pack(side=tk.LEFT, padx=2)
+
+    def create_arbitrary_rotation_controls(self, parent):
+        frame = ttk.LabelFrame(parent, text="Вращение вокруг произвольной прямой", padding=5)
+        frame.pack(fill=tk.X, pady=2)
+        
+        p1_frame = ttk.Frame(frame)
+        p1_frame.pack(fill=tk.X, pady=2)
+        ttk.Label(p1_frame, text="Точка 1:").pack(side=tk.LEFT)
+        self.p1_x = ttk.Entry(p1_frame, width=5)
+        self.p1_x.insert(0, "200")
+        self.p1_x.pack(side=tk.LEFT, padx=2)
+        self.p1_y = ttk.Entry(p1_frame, width=5)
+        self.p1_y.insert(0, "200")
+        self.p1_y.pack(side=tk.LEFT, padx=2)
+        self.p1_z = ttk.Entry(p1_frame, width=5)
+        self.p1_z.insert(0, "200")
+        self.p1_z.pack(side=tk.LEFT, padx=2)
+        
+        p2_frame = ttk.Frame(frame)
+        p2_frame.pack(fill=tk.X, pady=2)
+        ttk.Label(p2_frame, text="Точка 2:").pack(side=tk.LEFT)
+        self.p2_x = ttk.Entry(p2_frame, width=5)
+        self.p2_x.insert(0, "400")
+        self.p2_x.pack(side=tk.LEFT, padx=2)
+        self.p2_y = ttk.Entry(p2_frame, width=5)
+        self.p2_y.insert(0, "400")
+        self.p2_y.pack(side=tk.LEFT, padx=2)
+        self.p2_z = ttk.Entry(p2_frame, width=5)
+        self.p2_z.insert(0, "400")
+        self.p2_z.pack(side=tk.LEFT, padx=2)
+        
+        angle_frame = ttk.Frame(frame)
+        angle_frame.pack(fill=tk.X, pady=2)
+        ttk.Label(angle_frame, text="Угол:").pack(side=tk.LEFT)
+        self.arbitrary_angle_entry = ttk.Entry(angle_frame, width=5)
+        self.arbitrary_angle_entry.insert(0, "45")
+        self.arbitrary_angle_entry.pack(side=tk.LEFT, padx=2)
+        ttk.Label(angle_frame, text="°").pack(side=tk.LEFT)
+        
+        ttk.Button(frame, text="Применить вращение", command=self.apply_arbitrary_rotation).pack(pady=2)
+
+    # ===== МЕТОДЫ УПРАВЛЕНИЯ КАМЕРОЙ =====
+    
+    def set_camera_quick(self, x, y, z):
+        """Быстрая установка позиции камеры"""
+        self.camera.set_position(x, y, z)
+        if not self.camera_view:
+            self.enable_camera_view()
+        self.render()
+        
+    def enable_camera_view(self):
+        """Включение вида с камеры"""
+        self.camera_view = True
+        self.render()
+        
+    def disable_camera_view(self):
+        """Отключение вида с камеры"""
+        self.camera_view = False
+        self.render()
+        
+    def start_camera_rotation(self):
+        """Запуск вращения камеры вокруг объекта"""
+        self.camera.start_rotation()
+        
+    def stop_camera_rotation(self):
+        """Остановка вращения камеры"""
+        self.camera.stop_rotation()
+        
+    def reset_camera(self):
+        """Сброс камеры в начальное положение"""
+        self.camera.set_position(0, 0, 500)
+        self.camera.set_target(0, 0, 0)
+        self.render()
+
+    def animate(self):
+        """Цикл анимации"""
+        if self.camera.is_rotating:
+            self.camera.update_orbit()
+            self.render()
+            
+        # Планируем следующий кадр анимации
+        self.animation_id = self.root.after(16, self.animate)  # ~60 FPS
+
+    # ===== ОБРАБОТЧИКИ СОБЫТИЙ МЫШИ =====
+    
+    def on_mouse_down(self, event):
+        """Обработчик нажатия кнопки мыши"""
+        self.last_mouse_x = event.x
+        self.last_mouse_y = event.y
+        self.mouse_dragging = True
+        
+        # Определяем режим перетаскивания
+        if event.num == 1:  # ЛКМ
+            self.drag_mode = 'rotate'
+        elif event.num == 3:  # ПКМ
+            self.drag_mode = 'move'
+    
+    def on_mouse_drag(self, event):
+        """Обработчик перетаскивания мыши"""
+        if not self.mouse_dragging:
+            return
+            
+        dx = event.x - self.last_mouse_x
+        dy = event.y - self.last_mouse_y
+        
+        if self.drag_mode == 'rotate':
+            # Вращение камеры вокруг цели
+            angle_x = dy * 0.01  # Чувствительность вращения
+            angle_y = dx * 0.01
+            self.camera.rotate_around_target(angle_x, angle_y)
+        elif self.drag_mode == 'move':
+            # Перемещение камеры
+            move_speed = 0.5
+            self.camera.move(-dx * move_speed, dy * move_speed, 0)
+            # Также перемещаем цель, чтобы камера продолжала смотреть в том же направлении
+            self.camera.set_target(self.camera.target[0] - dx * move_speed, 
+                                 self.camera.target[1] + dy * move_speed, 
+                                 self.camera.target[2])
+        
+        self.last_mouse_x = event.x
+        self.last_mouse_y = event.y
+        self.render()
+    
+    def on_mouse_up(self, event):
+        """Обработчик отпускания кнопки мыши"""
+        self.mouse_dragging = False
+        self.drag_mode = None
+    
+    def on_mouse_wheel(self, event):
+        """Обработчик колеса мыши"""
+        if event.delta > 0 or event.num == 4:  # Вверх или кнопка 4 (Linux)
+            # Приближение
+            self.camera.move_forward(10)
+        else:  # Вниз или кнопка 5 (Linux)
+            # Отдаление
+            self.camera.move_backward(10)
+        self.render()
+    
+    def on_key_press(self, event):
+        """Обработчик нажатия клавиш"""
+        move_speed = 10
+        
+        if event.char.lower() == 'w':
+            # Движение вперед
+            self.camera.move_forward(move_speed)
+        elif event.char.lower() == 's':
+            # Движение назад
+            self.camera.move_backward(move_speed)
+        elif event.char.lower() == 'a':
+            # Движение влево
+            self.camera.move_left(move_speed)
+        elif event.char.lower() == 'd':
+            # Движение вправо
+            self.camera.move_right(move_speed)
+        elif event.char.lower() == 'q':
+            # Движение вверх
+            self.camera.move_up(move_speed)
+        elif event.char.lower() == 'e':
+            # Движение вниз
+            self.camera.move_down(move_speed)
+        elif event.char.lower() == 'r':
+            # Сброс камеры
+            self.reset_camera()
+        else:
+            return  # Неизвестная клавиша, игнорируем
+        
+        self.render()
+
+    def set_view_preset(self, x, y, z):
+        """Установка предустановленного вектора обзора"""
+        self.view_x_entry.delete(0, tk.END)
+        self.view_x_entry.insert(0, str(x))
+        self.view_y_entry.delete(0, tk.END)
+        self.view_y_entry.insert(0, str(y))
+        self.view_z_entry.delete(0, tk.END)
+        self.view_z_entry.insert(0, str(z))
+        self.apply_view_vector()
+
+    def toggle_backface_culling(self):
+        """Включение/отключение отсечения нелицевых граней"""
+        self.backface_culling = self.culling_var.get()
+        self.render()
+
+    def apply_view_vector(self):
+        """Применение нового вектора обзора"""
+        try:
+            x = float(self.view_x_entry.get())
+            y = float(self.view_y_entry.get())
+            z = float(self.view_z_entry.get())
+            
+            self.view_vector = np.array([x, y, z])
+            
+            # Нормализуем вектор обзора
+            norm = np.linalg.norm(self.view_vector)
+            if norm > 0:
+                self.view_vector = self.view_vector / norm
+                
+            self.render()
+            
+        except ValueError:
+            messagebox.showerror("Ошибка", "Некорректные значения вектора обзора")
+
+    def is_polygon_visible(self, polygon):
+        """Проверка видимости полигона с учетом отсечения нелицевых граней"""
+        if not self.backface_culling:
+            return True
+            
+        normal = polygon.get_normal()
+        
+        # Если нормаль не определена, считаем полигон видимым
+        if np.linalg.norm(normal) == 0:
+            return True
+            
+        # В режиме камеры используем направление от камеры к объекту
+        if self.camera_view:
+            view_dir = self.camera.target - self.camera.position
+            view_dir = view_dir / np.linalg.norm(view_dir)
+            dot_product = np.dot(normal, view_dir)
+        else:
+            # В обычном режиме используем глобальный вектор обзора
+            dot_product = np.dot(normal, self.view_vector)
+        
+        # Полигон видим, если угол между нормалью и вектором обзора больше 90 градусов
+        return dot_product < 0
+
+    def draw_view_indicator(self):
+        """Отрисовка индикатора направления обзора"""
+        if self.polyhedron is None:
+            return
+            
+        # Размеры холста
+        canvas_width = self.canvas.winfo_width()
+        canvas_height = self.canvas.winfo_height()
+        
+        if canvas_width <= 1 or canvas_height <= 1:
+            return
+            
+        # Создаем индикатор в правом верхнем углу
+        indicator_size = 60
+        margin = 10
+        center_x = canvas_width - margin - indicator_size // 2
+        center_y = margin + indicator_size // 2
+        
+        # Рисуем круг-индикатор
+        self.canvas.create_oval(
+            center_x - indicator_size // 2, center_y - indicator_size // 2,
+            center_x + indicator_size // 2, center_y + indicator_size // 2,
+            outline="black", fill="lightgray", width=1
+        )
+        
+        # Вычисляем направление стрелки
+        if self.camera_view:
+            # В режиме камеры показываем направление от камеры к цели
+            view_dir = self.camera.target - self.camera.position
+            view_dir = view_dir / np.linalg.norm(view_dir)
+            arrow_x = view_dir[0] * (indicator_size // 2 - 5)
+            arrow_y = view_dir[1] * (indicator_size // 2 - 5)
+        else:
+            # В обычном режиме используем глобальный вектор обзора
+            arrow_x = self.view_vector[0] * (indicator_size // 2 - 5)
+            arrow_y = self.view_vector[1] * (indicator_size // 2 - 5)
+        
+        # Рисуем стрелку направления
+        self.canvas.create_line(
+            center_x, center_y,
+            center_x + arrow_x, center_y + arrow_y,
+            arrow=tk.LAST, fill="red", width=2, arrowshape=(6, 8, 3)
+        )
+        
+        # Точка в центре
+        self.canvas.create_oval(
+            center_x - 2, center_y - 2,
+            center_x + 2, center_y + 2,
+            fill="blue"
+        )
+    
+    def draw_camera_model(self):
+        """Отрисовка 3D модели камеры в обычном режиме"""
+        if self.camera_view or self.polyhedron is None:
+            return
+            
+        # Создаем простую 3D модель камеры (пирамида с прямоугольным основанием)
+        camera_size = 20
+        camera_vertices = [
+            # Основание пирамиды (прямоугольник)
+            Point(-camera_size, -camera_size, 0),
+            Point(camera_size, -camera_size, 0),
+            Point(camera_size, camera_size, 0),
+            Point(-camera_size, camera_size, 0),
+            # Верхушка пирамиды (объектив)
+            Point(0, 0, camera_size * 2)
+        ]
+        
+        # Грани камеры
+        camera_faces = [
+            [0, 1, 2, 3],  # Основание
+            [0, 1, 4],     # Передняя грань
+            [1, 2, 4],     # Правая грань
+            [2, 3, 4],     # Задняя грань
+            [3, 0, 4]      # Левая грань
+        ]
+        
+        # Создаем полигоны для камеры
+        camera_polygons = Polygon.polygons_from_vertices(camera_vertices, camera_faces)
+        
+        # Вычисляем направление камеры
+        direction = self.camera.target - self.camera.position
+        direction = direction / np.linalg.norm(direction)
+        
+        # Создаем матрицу преобразования для камеры
+        # Позиционируем модель камеры в позиции камеры и ориентируем ее по направлению
+        up = np.array([0, 1, 0])
+        right = np.cross(direction, up)
+        right = right / np.linalg.norm(right)
+        up = np.cross(right, direction)
+        
+        # Матрица преобразования
+        transform_matrix = np.eye(4)
+        transform_matrix[0, :3] = right
+        transform_matrix[1, :3] = up
+        transform_matrix[2, :3] = direction
+        transform_matrix[:3, 3] = self.camera.position
+        
+        # Преобразуем вершины камеры
+        transformed_vertices = []
+        for vertex in camera_vertices:
+            transformed_coords = np.dot(transform_matrix, vertex.coordinates)
+            transformed_vertices.append(Point(transformed_coords[0], transformed_coords[1], transformed_coords[2]))
+        
+        # Создаем полигоны с преобразованными вершинами
+        transformed_polygons = []
+        for face in camera_faces:
+            polygon_vertices = [transformed_vertices[i] for i in face]
+            transformed_polygons.append(Polygon(polygon_vertices))
+        
+        # Отрисовываем камеру
+        for polygon in transformed_polygons:
+            projected_points = []
+            for p in polygon.vertices:
+                x, y, z = p.coordinates[:3]
+                
+                if self.projection_type == 'perspective':
+                    d = 500
+                    if z + d != 0:
+                        x_proj = x * d / (z + d)
+                        y_proj = y * d / (z + d)
+                    else:
+                        x_proj, y_proj = x, y
+                else:
+                    x_proj = x - z * 0.5
+                    y_proj = y - z * 0.5
+                
+                # Центрируем на холсте
+                canvas_width = self.canvas.winfo_width()
+                canvas_height = self.canvas.winfo_height()
+                x_proj = x_proj + canvas_width / 2
+                y_proj = y_proj + canvas_height / 2
+                
+                projected_points.append((x_proj, y_proj))
+            
+            if len(projected_points) >= 3:
+                coords = []
+                for point in projected_points:
+                    coords.extend(point)
+                
+                # Отрисовываем камеру красным цветом
+                self.canvas.create_polygon(
+                    coords, 
+                    outline="red", 
+                    fill="pink", 
+                    width=2,
+                    smooth=False
+                )
+        
+        # Также рисуем линию от камеры к цели
+        start_point = self.camera.position
+        end_point = self.camera.target
+        
+        def project_point(point):
+            x, y, z = point
+            if self.projection_type == 'perspective':
+                d = 500
+                if z + d != 0:
+                    x_proj = x * d / (z + d)
+                    y_proj = y * d / (z + d)
+                else:
+                    x_proj, y_proj = x, y
+            else:
+                x_proj = x - z * 0.5
+                y_proj = y - z * 0.5
+            
+            canvas_width = self.canvas.winfo_width()
+            canvas_height = self.canvas.winfo_height()
+            return (x_proj + canvas_width / 2, y_proj + canvas_height / 2)
+        
+        start_2d = project_point(start_point)
+        end_2d = project_point(end_point)
+        
+        # Рисуем линию от камеры к цели
+        self.canvas.create_line(
+            start_2d[0], start_2d[1], end_2d[0], end_2d[1],
+            fill="green", width=2, arrow=tk.LAST, arrowshape=(8, 10, 5)
+        )
+
+    def generate_rotation_figure(self):
+        """Генерирует фигуру вращения по заданной образующей"""
+        try:
+            # Читаем точки образующей
+            generatrix_text = self.generatrix_entry.get("1.0", tk.END).strip()
+            lines = generatrix_text.split('\n')
+            
+            generatrix_points = []
+            for line in lines:
+                line = line.strip()
+                if line:
+                    parts = line.split()
+                    if len(parts) >= 2:
+                        x = float(parts[0])
+                        y = float(parts[1])
+                        generatrix_points.append((x, y))
+            
+            if len(generatrix_points) < 2:
+                messagebox.showerror("Ошибка", "Образующая должна содержать хотя бы 2 точки")
+                return
+            
+            axis = self.axis_var.get()
+            subdivisions = int(self.rotation_subdivisions_entry.get())
+            
+            if subdivisions < 3:
+                messagebox.showerror("Ошибка", "Количество разбиений должно быть не менее 3")
+                return
+            
+            self.polyhedron = RotationFigureGenerator.generate_rotation_figure(
+                generatrix_points, axis, subdivisions
+            )
+            self.center_polyhedron()
+            self.render()
+            
+        except Exception as e:
+            messagebox.showerror("Ошибка", f"Не удалось построить фигуру вращения: {e}")
+
+    def generate_surface(self):
+        """Генерирует поверхность по заданной функции"""
+        try:
+            func_str = self.func_entry.get()
+            x_range = (float(self.x0_entry.get()), float(self.x1_entry.get()))
+            y_range = (float(self.y0_entry.get()), float(self.y1_entry.get()))
+            subdivisions = int(self.subdivisions_entry.get())
+            
+            if subdivisions < 2:
+                messagebox.showerror("Ошибка", "Количество разбиений должно быть не менее 2")
+                return
+            
+            self.polyhedron = SurfaceGenerator.generate_surface(func_str, x_range, y_range, subdivisions)
+            self.center_polyhedron()
+            self.render()
+            
+        except Exception as e:
+            messagebox.showerror("Ошибка", f"Не удалось построить поверхность: {e}")
+
+    def save_obj_file(self):
+        """Сохраняет модель в OBJ файл"""
+        if not self.polyhedron:
+            messagebox.showwarning("Предупреждение", "Нет модели для сохранения")
+            return
+            
+        file_path = filedialog.asksaveasfilename(
+            title="Сохранить OBJ файл",
+            defaultextension=".obj",
+            filetypes=[("OBJ files", "*.obj"), ("All files", "*.*")]
+        )
+        
+        if file_path:
+            try:
+                if self.polyhedron.save_to_obj(file_path):
+                    messagebox.showinfo("Успех", "Модель успешно сохранена в OBJ файл")
+                else:
+                    messagebox.showerror("Ошибка", "Не удалось сохранить модель")
+            except Exception as e:
+                messagebox.showerror("Ошибка", f"Не удалось сохранить модель: {e}")
+
+    def load_obj_file(self):
+        """Загружает модель из OBJ файла"""
+        file_path = filedialog.askopenfilename(
+            title="Загрузить OBJ файл",
+            filetypes=[("OBJ files", "*.obj"), ("All files", "*.*")]
+        )
+        
+        if file_path:
+            try:
+                vertices = []
+                faces = []
+                scale = 50  # Масштабирование для отображения
+                
+                with open(file_path, 'r') as file:
+                    for line in file:
+                        line = line.strip()
+                        if not line or line.startswith('#'):
+                            continue
+                            
+                        parts = line.split()
+                        if not parts:
+                            continue
+                            
+                        if parts[0] == 'v':  # вершина
+                            if len(parts) >= 4:
+                                x = float(parts[1]) * scale
+                                y = float(parts[2]) * scale
+                                z = float(parts[3]) * scale
+                                vertices.append(Point(x, y, z))
+                                
+                        elif parts[0] == 'f':  # грань
+                            face_vertices = []
+                            for part in parts[1:]:
+                                # OBJ формат может быть v, v/vt, v/vt/vn, v//vn
+                                vertex_data = part.split('/')[0]
+                                if vertex_data:
+                                    # Индексы в OBJ начинаются с 1, поэтому вычитаем 1
+                                    vertex_index = int(vertex_data) - 1
+                                    if vertex_index >= 0 and vertex_index < len(vertices):
+                                        face_vertices.append(vertex_index)
+                            
+                            if len(face_vertices) >= 3:
+                                # Если грань имеет больше 3 вершин, разбиваем на треугольники
+                                for i in range(1, len(face_vertices) - 1):
+                                    faces.append([face_vertices[0], face_vertices[i], face_vertices[i + 1]])
+                
+                if vertices and faces:
+                    polygons = Polygon.polygons_from_vertices(vertices, faces)
+                    self.polyhedron = Polyhedron(polygons)
+                    self.center_polyhedron()
+                    self.render()
+                    
+            except Exception as e:
+                messagebox.showerror("Ошибка", f"Не удалось загрузить OBJ файл: {e}")
+
+    def center_polyhedron(self):
+        if not self.polyhedron:
+            return
+            
+        center = self.polyhedron.get_center()
+        translate_matrix = self.get_translation_matrix(300 - center[0], 300 - center[1], 300 - center[2])
+        self.polyhedron.transform(translate_matrix)
+
+    # МАТРИЧНЫЕ ПРЕОБРАЗОВАНИЯ
+    def get_translation_matrix(self, dx, dy, dz):
+        return np.array([
+            [1, 0, 0, dx],
+            [0, 1, 0, dy],
+            [0, 0, 1, dz],
+            [0, 0, 0, 1]
+        ])
+
+    def get_rotation_matrix_x(self, angle):
+        cos_a, sin_a = math.cos(angle), math.sin(angle)
+        return np.array([
+            [1, 0, 0, 0],
+            [0, cos_a, -sin_a, 0],
+            [0, sin_a, cos_a, 0],
+            [0, 0, 0, 1]
+        ])
+
+    def get_rotation_matrix_y(self, angle):
+        cos_a, sin_a = math.cos(angle), math.sin(angle)
+        return np.array([
+            [cos_a, 0, sin_a, 0],
+            [0, 1, 0, 0],
+            [-sin_a, 0, cos_a, 0],
+            [0, 0, 0, 1]
+        ])
+
+    def get_rotation_matrix_z(self, angle):
+        cos_a, sin_a = math.cos(angle), math.sin(angle)
+        return np.array([
+            [cos_a, -sin_a, 0, 0],
+            [sin_a, cos_a, 0, 0],
+            [0, 0, 1, 0],
+            [0, 0, 0, 1]
+        ])
+
+    def get_scaling_matrix(self, sx, sy, sz):
+        return np.array([
+            [sx, 0, 0, 0],
+            [0, sy, 0, 0],
+            [0, 0, sz, 0],
+            [0, 0, 0, 1]
+        ])
+
+    def get_reflection_matrix(self, plane):
+        if plane == 'xy':
+            return np.array([[1, 0, 0, 0], [0, 1, 0, 0], [0, 0, -1, 0], [0, 0, 0, 1]])
+        elif plane == 'xz':
+            return np.array([[1, 0, 0, 0], [0, -1, 0, 0], [0, 0, 1, 0], [0, 0, 0, 1]])
+        elif plane == 'yz':
+            return np.array([[-1, 0, 0, 0], [0, 1, 0, 0], [0, 0, 1, 0], [0, 0, 0, 1]])
+
+    def get_rotation_around_axis(self, axis_vector, angle, center):
+        u = axis_vector / np.linalg.norm(axis_vector)
+        ux, uy, uz = u
+        
+        cos_a = math.cos(angle)
+        sin_a = math.sin(angle)
+        one_minus_cos = 1 - cos_a
+        
+        R = np.array([
+            [cos_a + ux*ux*one_minus_cos, ux*uy*one_minus_cos - uz*sin_a, ux*uz*one_minus_cos + uy*sin_a, 0],
+            [uy*ux*one_minus_cos + uz*sin_a, cos_a + uy*uy*one_minus_cos, uy*uz*one_minus_cos - ux*sin_a, 0],
+            [uz*ux*one_minus_cos - uy*sin_a, uz*uy*one_minus_cos + ux*sin_a, cos_a + uz*uz*one_minus_cos, 0],
+            [0, 0, 0, 1]
+        ])
+        
+        T = self.get_translation_matrix(-center[0], -center[1], -center[2])
+        T_inv = self.get_translation_matrix(center[0], center[1], center[2])
+        
+        return np.dot(T_inv, np.dot(R, T))
+
+    def apply_translation(self):
+        if not self.polyhedron:
+            return
+            
+        dx = float(self.dx_entry.get() or 0)
+        dy = float(self.dy_entry.get() or 0)
+        dz = float(self.dz_entry.get() or 0)
+        
+        matrix = self.get_translation_matrix(dx, dy, dz)
+        self.polyhedron.transform(matrix)
+        self.render()
+
+    def apply_rotation_around_point(self):
+        if not self.polyhedron:
+            return
+            
+        center_x = float(self.center_x_entry.get() or 0)
+        center_y = float(self.center_y_entry.get() or 0)
+        center_z = float(self.center_z_entry.get() or 0)
+        angle = math.radians(float(self.angle_entry.get() or 0))
+        
+        T = self.get_translation_matrix(-center_x, -center_y, -center_z)
+        R = self.get_rotation_matrix_z(angle)
+        T_inv = self.get_translation_matrix(center_x, center_y, center_z)
+        
+        matrix = np.dot(T_inv, np.dot(R, T))
+        self.polyhedron.transform(matrix)
+        self.render()
+
+    def apply_rotation_around_center(self, axis):
+        if not self.polyhedron:
+            return
+            
+        center = self.polyhedron.get_center()
+        angle = math.radians(30)
+        
+        if axis == 'x':
+            matrix = self.get_rotation_around_axis(np.array([1, 0, 0]), angle, center)
+        elif axis == 'y':
+            matrix = self.get_rotation_around_axis(np.array([0, 1, 0]), angle, center)
+        elif axis == 'z':
+            matrix = self.get_rotation_around_axis(np.array([0, 0, 1]), angle, center)
+            
+        self.polyhedron.transform(matrix)
+        self.render()
+
+    def apply_scaling_around_center(self):
+        if not self.polyhedron:
+            return
+            
+        scale_factor = float(self.scale_factor_entry.get() or 1.0)
+        center = self.polyhedron.get_center()
+        
+        T = self.get_translation_matrix(-center[0], -center[1], -center[2])
+        S = self.get_scaling_matrix(scale_factor, scale_factor, scale_factor)
+        T_inv = self.get_translation_matrix(center[0], center[1], center[2])
+        
+        matrix = np.dot(T_inv, np.dot(S, T))
+        self.polyhedron.transform(matrix)
+        self.render()
+
+    def apply_scaling_around_point(self):
+        if not self.polyhedron:
+            return
+            
+        scale_factor = float(self.scale_factor_entry.get() or 1.0)
+        center_x = float(self.center_x_entry.get() or 0)
+        center_y = float(self.center_y_entry.get() or 0)
+        center_z = float(self.center_z_entry.get() or 0)
+        
+        T = self.get_translation_matrix(-center_x, -center_y, -center_z)
+        S = self.get_scaling_matrix(scale_factor, scale_factor, scale_factor)
+        T_inv = self.get_translation_matrix(center_x, center_y, center_z)
+        
+        matrix = np.dot(T_inv, np.dot(S, T))
+        self.polyhedron.transform(matrix)
+        self.render()
+
+    def apply_reflection(self, plane):
+        if not self.polyhedron:
+            return
+            
+        center = self.polyhedron.get_center()
+        
+        T_to_origin = self.get_translation_matrix(-center[0], -center[1], -center[2])
+        R = self.get_reflection_matrix(plane)
+        T_back = self.get_translation_matrix(center[0], center[1], center[2])
+        
+        matrix = np.dot(T_back, np.dot(R, T_to_origin))
+        self.polyhedron.transform(matrix)
+        self.render()
+
+    def apply_arbitrary_rotation(self):
+        if not self.polyhedron:
+            return
+            
+        try:
+            p1 = np.array([float(self.p1_x.get()), float(self.p1_y.get()), float(self.p1_z.get())])
+            p2 = np.array([float(self.p2_x.get()), float(self.p2_y.get()), float(self.p2_z.get())])
+            angle = math.radians(float(self.arbitrary_angle_entry.get()))
+            
+            axis_vector = p2 - p1
+            if np.linalg.norm(axis_vector) < 1e-10:
+                return
+                
+            matrix = self.get_rotation_around_axis(axis_vector, angle, p1)
+            self.polyhedron.transform(matrix)
+            self.render()
+            
+        except ValueError:
+            print("Ошибка: проверьте правильность введенных данных")
+
+    def render(self):
+        self.canvas.delete("all")
+        
+        if not self.polyhedron:
+            # Отрисовка индикатора даже если нет модели
+            self.draw_view_indicator()
+            return
+            
+        sorted_polygons = sorted(self.polyhedron.polygons, 
+                               key=lambda p: p.get_center_z(), 
+                               reverse=True)
+        
+        visible_count = 0
+        total_count = len(sorted_polygons)
+        
+        for polygon in sorted_polygons:
+            # Проверка видимости полигона с учетом отсечения нелицевых граней
+            if not self.is_polygon_visible(polygon):
+                continue
+                
+            visible_count += 1
+            projected_points = []
+            
+            for p in polygon.vertices:
+                x, y, z = p.coordinates[:3]
+                
+                if self.camera_view:
+                    # РЕЖИМ КАМЕРЫ: используем матрицы вида и проекции
+                    
+                    # Получаем матрицы
+                    view_matrix = self.camera.get_view_matrix()
+                    canvas_width = max(self.canvas.winfo_width(), 1)
+                    canvas_height = max(self.canvas.winfo_height(), 1)
+                    aspect_ratio = canvas_width / canvas_height
+                    projection_matrix = self.camera.get_projection_matrix(aspect_ratio)
+                    
+                    # Преобразуем точку в однородных координатах
+                    point_4d = np.array([x, y, z, 1.0])
+                    
+                    # Применяем матрицу вида
+                    view_point = np.dot(view_matrix, point_4d)
+                    
+                    # Применяем матрицу проекции
+                    proj_point = np.dot(projection_matrix, view_point)
+                    
+                    # Перспективное деление
+                    if proj_point[3] != 0:
+                        proj_point = proj_point / proj_point[3]
+                    
+                    # Масштабируем и центрируем на холсте
+                    x_proj = (proj_point[0] + 1) * 0.5 * canvas_width
+                    y_proj = (1 - proj_point[1]) * 0.5 * canvas_height
+                    
+                else:
+                    # ОБЫЧНЫЙ РЕЖИМ: используем старую проекцию
+                    if self.projection_type == 'perspective':
+                        d = 500
+                        if z + d != 0:
+                            x_proj = x * d / (z + d)
+                            y_proj = y * d / (z + d)
+                        else:
+                            x_proj, y_proj = x, y
+                    else:
+                        x_proj = x - z * 0.5
+                        y_proj = y - z * 0.5
+                    
+                    # Центрируем на холсте
+                    canvas_width = self.canvas.winfo_width()
+                    canvas_height = self.canvas.winfo_height()
+                    x_proj = x_proj + canvas_width / 2
+                    y_proj = y_proj + canvas_height / 2
+                
+                projected_points.append((x_proj, y_proj))
+            
+            if len(projected_points) >= 3:
+                coords = []
+                for point in projected_points:
+                    coords.extend(point)
+                
+                self.canvas.create_polygon(
+                    coords, 
+                    outline="black", 
+                    fill="lightblue", 
+                    width=1,
+                    smooth=False
+                )
+        
+        # Отрисовка модели камеры в обычном режиме
+        if not self.camera_view:
+            self.draw_camera_model()
+        
+        # Отрисовка индикатора направления обзора
+        self.draw_view_indicator()
+        
+        # Отображение информации о режиме
+        mode_text = f"Режим: {'КАМЕРА' if self.camera_view else 'ОБЫЧНЫЙ'}\n"
+        mode_text += f"Грани: {visible_count}/{total_count}"
+        
+        if self.camera_view:
+            mode_text += f"\nПозиция: ({self.camera.position[0]:.0f}, {self.camera.position[1]:.0f}, {self.camera.position[2]:.0f})"
+            mode_text += f"\nУправление: WASD, мышь"
+        
+        self.canvas.create_text(
+            10, 10, 
+            text=mode_text, 
+            anchor=tk.NW, 
+            fill="black", 
+            font=("Arial", 10, "bold"),
+            justify=tk.LEFT
+        )
+
+    def set_projection(self, projection_type):
+        self.projection_type = projection_type
+        self.render()
+
+if __name__ == "__main__":
+    root = tk.Tk()
+    app = Application(root)
+    root.mainloop()

@@ -130,18 +130,16 @@ class SurfaceGenerator:
             for i, x in enumerate(x_vals):
                 for j, y in enumerate(y_vals):
                     try:
-                        # Вычисляем z по функции
                         z = SurfaceGenerator.evaluate_function(func_str, x, y)
                         vertices.append(Point(x, y, z))
                         vertex_grid[(i, j)] = vertex_index
                         vertex_index += 1
                     except:
-                        # Если вычисление не удалось, используем 0
                         vertices.append(Point(x, y, 0))
                         vertex_grid[(i, j)] = vertex_index
                         vertex_index += 1
             
-            # Создаем грани (квадраты из двух треугольников)
+           
             for i in range(n - 1):
                 for j in range(n - 1):
                     # Индексы вершин текущего квадрата
@@ -150,9 +148,8 @@ class SurfaceGenerator:
                     v10 = vertex_grid[(i + 1, j)]
                     v11 = vertex_grid[(i + 1, j + 1)]
                     
-                    # Два треугольника, образующих квадрат
-                    faces.append([v00, v01, v11])  # Первый треугольник
-                    faces.append([v00, v11, v10])  # Второй треугольник
+                    faces.append([v00, v01, v11])  
+                    faces.append([v00, v11, v10])  
             
             polygons = Polygon.polygons_from_vertices(vertices, faces)
             return Polyhedron(polygons)
@@ -162,7 +159,6 @@ class SurfaceGenerator:
     
     @staticmethod
     def evaluate_function(func_str, x, y):
-        # Заменяем математические функции на их numpy аналоги
         func_str = func_str.replace('sin', 'np.sin')
         func_str = func_str.replace('cos', 'np.cos')
         func_str = func_str.replace('tan', 'np.tan')
@@ -172,7 +168,6 @@ class SurfaceGenerator:
         func_str = func_str.replace('pi', 'np.pi')
         func_str = func_str.replace('e', 'np.e')
         
-        # Вычисляем значение
         return eval(func_str, {'np': np, 'x': x, 'y': y})
 
 class Application:
