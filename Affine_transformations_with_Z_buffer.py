@@ -107,6 +107,8 @@ class Application:
         self.create_controls_panel()
         self.render()
 
+        self.colors = np.array([[135, 206, 250],[135, 20, 25],[10, 206, 25],[135, 0, 250],[10, 20, 250],[10, 20, 25],[200, 200, 200],[135, 206, 0]])
+
     def create_controls_panel(self):
         controls_frame = tk.Frame(self.root)
         controls_frame.pack(side=tk.RIGHT, fill=tk.Y, padx=10, pady=10)
@@ -616,17 +618,18 @@ class Application:
         return np.mean([p[2] for p in original_points])
 
     def render_with_z_buffer(self):
-        # Очищаем Z-буфер
         self.z_buffer.clear()
         
-        # Рендерим все полигоны в Z-буфер
+        counter = 0
         for polygon in self.polyhedron.polygons:
-            # Используем разные цвета для разных полигонов для наглядности
-            color = np.array([135, 206, 250])  # lightblue
+            #if not self.is_polygon_visible(polygon):
+                #continue
             
+            # Используем разные цвета для разных полигонов для наглядности
+            color = self.colors[counter % len(self.colors)]
+            counter += 1
             self.rasterize_polygon(polygon, color)
         
-        # Отображаем содержимое Z-буфера на канвас
         image = tk.PhotoImage(width=self.z_buffer.width, height=self.z_buffer.height)
         
         for y in range(self.z_buffer.height):
