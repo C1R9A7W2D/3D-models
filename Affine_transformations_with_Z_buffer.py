@@ -74,16 +74,16 @@ class ZBuffer:
     def __init__(self, width, height):
         self.width = width
         self.height = height
-        self.buffer = np.full((height, width), -np.inf)
+        self.buffer = np.full((height, width), np.inf)
         self.color_buffer = np.full((height, width, 3), 255, dtype=np.uint8)
         
     def clear(self):
-        self.buffer.fill(-np.inf)
+        self.buffer.fill(np.inf)
         self.color_buffer.fill(255)
         
     def update(self, x, y, z, color):
         if 0 <= x < self.width and 0 <= y < self.height:
-            if z > self.buffer[y, x]:
+            if z < self.buffer[y, x]:
                 self.buffer[y, x] = z
                 self.color_buffer[y, x] = color
 
