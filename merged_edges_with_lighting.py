@@ -388,6 +388,11 @@ class Lighting:
         
         # Диффузное освещение
         diffuse_factor = max(np.dot(normal, light_direction), 0)
+        if diffuse_factor > 0:
+            diffuse_factor = 1 if diffuse_factor > 0.8 else (0.5 if diffuse_factor > 0.4 else 0)
+        else:
+            diffuse_factor = 0
+        
         diffuse = self.diffuse_intensity * diffuse_factor * self.object_color
         
         # Зеркальное освещение
