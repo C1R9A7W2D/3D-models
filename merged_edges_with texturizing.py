@@ -657,100 +657,6 @@ class RotationFigureGenerator:
         except Exception as e:
             raise Exception(f"Ошибка генерации фигуры вращения: {e}")
 
-class RegularPolyhedronGenerator:
-    @staticmethod
-    def generate_tetrahedron(size=100):
-        """Генерирует тетраэдр"""
-        vertices = []
-        
-        # Вершины тетраэдра
-        vertices.append(Point(0, 0, 0))
-        vertices.append(Point(size, 0, 0))
-        vertices.append(Point(size/2, size * math.sqrt(3)/2, 0))
-        vertices.append(Point(size/2, size * math.sqrt(3)/6, size * math.sqrt(2/3)))
-        
-        # Грани тетраэдра
-        faces = [
-            [0, 1, 2],  # Основание
-            [0, 1, 3],
-            [1, 2, 3],
-            [2, 0, 3]
-        ]
-        
-        # Добавляем текстурные координаты
-        for i, vertex in enumerate(vertices):
-            u = i % 2
-            v = i // 2
-            vertex.texture_coords = np.array([u, v])
-        
-        polygons = Polygon.polygons_from_vertices(vertices, faces)
-        polyhedron = Polyhedron(polygons)
-        polyhedron.calculate_vertex_normals()
-        return polyhedron
-    
-    @staticmethod
-    def generate_cube(size=100):
-        """Генерирует куб"""
-        vertices = []
-        
-        # Вершины куба
-        for x in [-size/2, size/2]:
-            for y in [-size/2, size/2]:
-                for z in [-size/2, size/2]:
-                    vertices.append(Point(x, y, z))
-        
-        # Грани куба
-        faces = [
-            [0, 1, 3, 2],  # Нижняя
-            [4, 5, 7, 6],  # Верхняя
-            [0, 1, 5, 4],  # Передняя
-            [2, 3, 7, 6],  # Задняя
-            [0, 2, 6, 4],  # Левая
-            [1, 3, 7, 5]   # Правая
-        ]
-        
-        # Добавляем текстурные координаты для каждой грани
-        for i, vertex in enumerate(vertices):
-            # Простая текстурная развертка
-            u = (vertex.coordinates[0] + size/2) / size
-            v = (vertex.coordinates[1] + size/2) / size
-            vertex.texture_coords = np.array([u, v])
-        
-        polygons = Polygon.polygons_from_vertices(vertices, faces)
-        polyhedron = Polyhedron(polygons)
-        polyhedron.calculate_vertex_normals()
-        return polyhedron
-    
-    @staticmethod
-    def generate_octahedron(size=100):
-        """Генерирует октаэдр"""
-        vertices = []
-        
-        # Вершины октаэдра
-        vertices.append(Point(0, 0, size))           # Верхняя
-        vertices.append(Point(0, 0, -size))          # Нижняя
-        vertices.append(Point(size, 0, 0))           # Передняя
-        vertices.append(Point(-size, 0, 0))          # Задняя
-        vertices.append(Point(0, size, 0))           # Правая
-        vertices.append(Point(0, -size, 0))          # Левая
-        
-        # Грани октаэдра
-        faces = [
-            [0, 2, 4], [0, 4, 3], [0, 3, 5], [0, 5, 2],  # Верхние
-            [1, 4, 2], [1, 3, 4], [1, 5, 3], [1, 2, 5]   # Нижние
-        ]
-        
-        # Добавляем текстурные координаты
-        for i, vertex in enumerate(vertices):
-            u = (vertex.coordinates[0] + size) / (2 * size)
-            v = (vertex.coordinates[1] + size) / (2 * size)
-            vertex.texture_coords = np.array([u, v])
-        
-        polygons = Polygon.polygons_from_vertices(vertices, faces)
-        polyhedron = Polyhedron(polygons)
-        polyhedron.calculate_vertex_normals()
-        return polyhedron
-
 class ZBuffer:
     def __init__(self, width, height):
         self.width = width
@@ -944,17 +850,6 @@ class Application:
                   command=self.load_texture).pack(fill=tk.X, pady=2)
         ttk.Button(texture_frame, text="Сбросить текстуру", 
                   command=self.reset_texture).pack(fill=tk.X, pady=2)
-        
-        # Панель генерации правильных многогранников
-        polyhedra_frame = ttk.LabelFrame(self.scrollable_frame, text="Правильные многогранники", padding=5)
-        polyhedra_frame.pack(fill=tk.X, pady=(0, 5))
-        
-        ttk.Button(polyhedra_frame, text="Тетраэдр", 
-                  command=lambda: self.generate_regular_polyhedron('tetrahedron')).pack(fill=tk.X, pady=2)
-        ttk.Button(polyhedra_frame, text="Куб", 
-                  command=lambda: self.generate_regular_polyhedron('cube')).pack(fill=tk.X, pady=2)
-        ttk.Button(polyhedra_frame, text="Октаэдр", 
-                  command=lambda: self.generate_regular_polyhedron('octahedron')).pack(fill=tk.X, pady=2)
         
         # Панель управления алгоритмами удаления невидимых граней
         algorithm_frame = ttk.LabelFrame(self.scrollable_frame, text="Алгоритмы удаления невидимых граней", padding=5)
@@ -1286,20 +1181,6 @@ class Application:
     def reset_texture(self):
         """Сбрасывает текстуру на шахматную доску"""
         self.texture = Texture()
-        self.render()
-        
-    def generate_regular_polyhedron(self, poly_type):
-        """Генерирует правильный многогранник"""
-        if poly_type == 'tetrahedron':
-            self.polyhedron = RegularPolyhedronGenerator.generate_tetrahedron()
-        elif poly_type == 'cube':
-            self.polyhedron = RegularPolyhedronGenerator.generate_cube()
-        elif poly_type == 'octahedron':
-            self.polyhedron = RegularPolyhedronGenerator.generate_octahedron()
-            
-        self.center_polyhedron()
-        if self.shading_mode == 'gouraud' and self.use_lighting:
-            self.polyhedron.calculate_vertex_colors(self.lighting)
         self.render()
 
     # ===== МЕТОДЫ УПРАВЛЕНИЯ ОСВЕЩЕНИЕМ =====
@@ -2310,7 +2191,10 @@ class Application:
             color = self.colors[counter % len(self.colors)]
             counter += 1
             
-            self.rasterize_polygon_with_lighting(polygon, color)
+            if self.use_z_buffer and (self.use_lighting or self.shading_mode == 'texture'):
+                self.rasterize_polygon_with_lighting(polygon, color)
+            else:
+                self.rasterize_polygon(polygon, color)
         
         # Создаем изображение из буфера цвета
         image = tk.PhotoImage(width=self.z_buffer.width, height=self.z_buffer.height)
