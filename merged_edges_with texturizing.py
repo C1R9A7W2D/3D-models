@@ -13,11 +13,18 @@ class Point:
         self.texture_coords = np.array([0, 0])  # Текстурные координаты [u, v]
 
     def transform(self, matrix):
+        # Преобразуем координаты
         transformed_coordinates = np.dot(matrix, self.coordinates)
-        # Преобразуем нормаль (используем верхнюю 3x3 часть матрицы)
-        normal_matrix = matrix[:3, :3]
+        
+        # Для нормалей используем обратную транспонированную матрицу 3x3
+        # Это корректно преобразует нормали при масштабировании и других аффинных преобразованиях
+        normal_matrix = np.linalg.inv(matrix[:3, :3]).T
         transformed_normal = np.dot(normal_matrix, self.normal)
-        transformed_normal = transformed_normal / np.linalg.norm(transformed_normal)
+        
+        # Нормализуем нормаль
+        norm = np.linalg.norm(transformed_normal)
+        if norm > 0:
+            transformed_normal = transformed_normal / norm
         
         new_point = Point(transformed_coordinates[0], transformed_coordinates[1], transformed_coordinates[2])
         new_point.normal = transformed_normal
@@ -384,9 +391,6 @@ class Lighting:
         # Коэффициенты освещения
         self.ambient_intensity = 0.3  # Фоновое освещение
         self.diffuse_intensity = 0.7  # Диффузное освещение
-        self.specular_intensity = 0.4  # Зеркальное освещение
-        # Блеск материала (shininess)
-        self.shininess = 32
         
     def set_light_position(self, x, y, z):
         self.light_position = np.array([x, y, z])
@@ -395,14 +399,16 @@ class Lighting:
         self.object_color = np.array([r, g, b])
         
     def lambert_shading(self, point, normal):
-        """Вычисляет цвет по модели Ламберта (диффузное отражение)"""
+        """Вычисляет цвет по модели Ламберта (диффузное отражение) - для шейдинга Гуро"""
         # Вектор от точки к источнику света
         light_direction = self.light_position - point
         light_direction = light_direction / np.linalg.norm(light_direction)
         
+        # Косинус угла между нормалью и направлением света
+        cos_angle = max(np.dot(normal, light_direction), 0)
+        
         # Диффузное освещение
-        diffuse_factor = max(np.dot(normal, light_direction), 0)
-        diffuse = self.diffuse_intensity * diffuse_factor * self.object_color
+        diffuse = self.diffuse_intensity * cos_angle * self.object_color
         
         # Фоновое освещение
         ambient = self.ambient_intensity * self.object_color
@@ -786,6 +792,18 @@ class Application:
         ttk.Radiobutton(shading_frame, text="Текстурирование", 
                        variable=self.shading_var, value='texture',
                        command=self.update_shading_mode).pack(anchor=tk.W, pady=2)
+
+        # Панель демонстрации шейдинга Гуро
+        gouraud_demo_frame = ttk.LabelFrame(self.scrollable_frame, text="Демонстрация шейдинга Гуро", padding=5)
+        gouraud_demo_frame.pack(fill=tk.X, pady=(0, 5))
+        
+        info_text = """Шейдинг Гуро с моделью Ламберта:
+1. Вычисляются нормали в каждой вершине
+2. Цвет в вершине рассчитывается по модели Ламберта
+3. Цвет интерполируется по полигону методом билинейной интерполяции
+4. Результат - плавное изменение цвета по поверхности"""
+        
+        ttk.Label(gouraud_demo_frame, text=info_text, justify=tk.LEFT, font=("Arial", 9)).pack(anchor=tk.W, pady=5)
         
         # Панель управления освещением
         lighting_frame = ttk.LabelFrame(self.scrollable_frame, text="Освещение", padding=5)
@@ -1156,10 +1174,17 @@ class Application:
     # ===== НОВЫЕ МЕТОДЫ ДЛЯ ШЕЙДИНГА ГУРО И ТЕКСТУРИРОВАНИЯ =====
     
     def update_shading_mode(self):
-        """Обновляет режим шейдинга"""
+        """Обновляет режим шейдинга с оптимизацией для Гуро"""
         self.shading_mode = self.shading_var.get()
-        if self.polyhedron and self.shading_mode == 'gouraud' and self.use_lighting:
-            self.polyhedron.calculate_vertex_colors(self.lighting)
+        if self.polyhedron:
+            if self.shading_mode == 'gouraud' and self.use_lighting:
+                # При активации режима Гуро пересчитываем цвета вершин
+                self.polyhedron.calculate_vertex_colors(self.lighting)
+            elif self.shading_mode == 'gouraud' and not self.use_lighting:
+                # Если Гуро выбран, но освещение выключено - включаем его
+                self.lighting_var.set(True)
+                self.use_lighting = True
+                self.polyhedron.calculate_vertex_colors(self.lighting)
         self.render()
         
     def load_texture(self):
@@ -1186,9 +1211,10 @@ class Application:
     # ===== МЕТОДЫ УПРАВЛЕНИЯ ОСВЕЩЕНИЕМ =====
     
     def toggle_lighting(self):
-        """Включение/отключение освещения"""
+        """Включение/отключение освещения с оптимизацией для Гуро"""
         self.use_lighting = self.lighting_var.get()
         if self.polyhedron and self.shading_mode == 'gouraud' and self.use_lighting:
+            # При включении освещения в режиме Гуро пересчитываем цвета вершин
             self.polyhedron.calculate_vertex_colors(self.lighting)
         self.render()
         
@@ -2041,6 +2067,106 @@ class Application:
                             
                             self.z_buffer.update(x, y, z, final_color)
 
+
+    def rasterize_polygon_gouraud(self, polygon, color):
+        """Оптимизированная растеризация полигона для шейдинга Гуро"""
+        if len(polygon.vertices) < 3:
+            return
+            
+        # Получаем проекции всех вершин
+        projected_points = []
+        vertex_colors = []
+        
+        for p in polygon.vertices:
+            x, y, z = p.coordinates[:3]
+            
+            # Простая перспективная проекция
+            if self.projection_type == 'perspective':
+                d = 500
+                if z + d != 0:
+                    x_proj = x * d / (z + d)
+                    y_proj = y * d / (z + d)
+                else:
+                    x_proj, y_proj = x, y
+            else:
+                x_proj = x - z * 0.5
+                y_proj = y - z * 0.5
+            
+            # Центрируем на холсте
+            canvas_width = self.canvas.winfo_width()
+            canvas_height = self.canvas.winfo_height()
+            x_proj = x_proj + canvas_width / 2
+            y_proj = y_proj + canvas_height / 2
+            
+            screen_x = int(x_proj)
+            screen_y = int(y_proj)
+            projected_points.append((screen_x, screen_y, z))
+            
+            # Получаем цвет вершины для Гуро
+            if p.color is not None:
+                vertex_colors.append((p.color * 255).astype(int))
+            else:
+                vertex_colors.append(color)
+        
+        # Находим ограничивающий прямоугольник
+        min_x = max(0, min(p[0] for p in projected_points))
+        max_x = min(self.z_buffer.width - 1, max(p[0] for p in projected_points))
+        min_y = max(0, min(p[1] for p in projected_points))
+        max_y = min(self.z_buffer.height - 1, max(p[1] for p in projected_points))
+        
+        if min_x >= max_x or min_y >= max_y:
+            return
+            
+        # Растеризация методом сканирующих строк с интерполяцией цвета
+        for y in range(min_y, max_y + 1):
+            intersections = []
+            n = len(projected_points)
+            
+            for i in range(n):
+                p1 = projected_points[i]
+                p2 = projected_points[(i + 1) % n]
+                vc1 = vertex_colors[i]
+                vc2 = vertex_colors[(i + 1) % n]
+                
+                # Проверяем, пересекает ли ребро сканирующую строку
+                if (p1[1] <= y and p2[1] > y) or (p2[1] <= y and p1[1] > y):
+                    # Вычисляем x-координату пересечения
+                    if p2[1] != p1[1]:
+                        t = (y - p1[1]) / (p2[1] - p1[1])
+                        x_intersect = p1[0] + t * (p2[0] - p1[0])
+                        z_intersect = p1[2] + t * (p2[2] - p1[2])
+                        
+                        # Интерполируем цвет
+                        color_intersect = vc1 + t * (vc2 - vc1)
+                        intersections.append((x_intersect, z_intersect, color_intersect))
+            
+            # Сортируем точки пересечения по x
+            intersections.sort(key=lambda inter: inter[0])
+            
+            # Заполняем пиксели между парами пересечений
+            for i in range(0, len(intersections), 2):
+                if i + 1 < len(intersections):
+                    x_start = int(intersections[i][0])
+                    x_end = int(intersections[i + 1][0])
+                    z_start = intersections[i][1]
+                    z_end = intersections[i + 1][1]
+                    color_start = intersections[i][2]
+                    color_end = intersections[i + 1][2]
+                    
+                    for x in range(x_start, x_end + 1):
+                        if 0 <= x < self.z_buffer.width:
+                            # Интерполируем z-координату и цвет
+                            if x_end != x_start:
+                                t_x = (x - x_start) / (x_end - x_start)
+                            else:
+                                t_x = 0.5
+                                
+                            z = z_start + t_x * (z_end - z_start)
+                            final_color = color_start + t_x * (color_end - color_start)
+                            final_color = np.clip(final_color, 0, 255).astype(int)
+                            
+                            self.z_buffer.update(x, y, z, final_color)
+
     def rasterize_polygon(self, polygon, color):
         """Растеризация полигона с использованием Z-буфера (без освещения)"""
         if len(polygon.vertices) < 3:
@@ -2191,10 +2317,14 @@ class Application:
             color = self.colors[counter % len(self.colors)]
             counter += 1
             
-            if self.use_z_buffer and (self.use_lighting or self.shading_mode == 'texture'):
-                self.rasterize_polygon_with_lighting(polygon, color)
-            else:
-                self.rasterize_polygon(polygon, color)
+            if self.use_z_buffer:
+                if self.shading_mode == 'gouraud' and self.use_lighting:
+                    # Используем оптимизированную растеризацию для Гуро
+                    self.rasterize_polygon_gouraud(polygon, color)
+                elif self.use_lighting or self.shading_mode == 'texture':
+                    self.rasterize_polygon_with_lighting(polygon, color)
+                else:
+                    self.rasterize_polygon(polygon, color)
         
         # Создаем изображение из буфера цвета
         image = tk.PhotoImage(width=self.z_buffer.width, height=self.z_buffer.height)
