@@ -390,6 +390,9 @@ class Lighting:
         # Коэффициенты освещения
         self.ambient_intensity = 0.3  # Фоновое освещение
         self.diffuse_intensity = 0.7  # Диффузное освещение
+        self.specular_intensity = 0.4  # Зеркальное освещение
+        # Блеск материала (shininess)
+        self.shininess = 32
         
     def set_light_position(self, x, y, z):
         self.light_position = np.array([x, y, z])
@@ -419,40 +422,41 @@ class Lighting:
         color = np.clip(color, 0, 1)
         
         return color
-        def phong_shading(self, point, normal, view_direction):
-            """Вычисляет цвет по модели Фонга"""
-            # Вектор от точки к источнику света
-            light_direction = self.light_position - point
-            light_direction = light_direction / np.linalg.norm(light_direction)
+    
+    def phong_shading(self, point, normal, view_direction):
+        """Вычисляет цвет по модели Фонга"""
+        # Вектор от точки к источнику света
+        light_direction = self.light_position - point
+        light_direction = light_direction / np.linalg.norm(light_direction)
             
-            # Отраженный вектор
-            reflect_direction = 2 * np.dot(normal, light_direction) * normal - light_direction
-            reflect_direction = reflect_direction / np.linalg.norm(reflect_direction)
+        # Отраженный вектор
+        reflect_direction = light_direction - 2 * np.dot(normal, light_direction) * normal
+        reflect_direction = reflect_direction / np.linalg.norm(reflect_direction)
             
-            # Фоновое освещение
-            ambient = self.ambient_intensity * self.object_color
+        # Фоновое освещение
+        ambient = self.ambient_intensity * self.object_color
             
-            # Диффузное освещение
-            diffuse_factor = max(np.dot(normal, light_direction), 0)
-            if diffuse_factor > 0:
-                diffuse_factor = 1 if diffuse_factor > 0.8 else (0.5 if diffuse_factor > 0.4 else 0)
-            else:
-                diffuse_factor = 0
+        # Диффузное освещение
+        diffuse_factor = max(np.dot(normal, light_direction), 0)
+        if diffuse_factor > 0:
+            diffuse_factor = 1 if diffuse_factor > 0.8 else (0.5 if diffuse_factor > 0.4 else 0)
+        else:
+            diffuse_factor = 0
             
-            diffuse = self.diffuse_intensity * diffuse_factor * self.object_color
+        diffuse = self.diffuse_intensity * diffuse_factor * self.object_color
             
-            # Зеркальное освещение
-            specular_factor = max(np.dot(view_direction, reflect_direction), 0)
-            specular_factor = pow(specular_factor, self.shininess)
-            specular = self.specular_intensity * specular_factor * self.light_color
+        # Зеркальное освещение
+        specular_factor = max(np.dot(view_direction, reflect_direction), 0)
+        specular_factor = pow(specular_factor, self.shininess)
+        specular = self.specular_intensity * specular_factor * self.light_color
             
-            # Общий цвет
-            color = ambient + diffuse + specular
+        # Общий цвет
+        color = ambient + diffuse + specular
             
-            # Ограничиваем значения цвета
-            color = np.clip(color, 0, 1)
+        # Ограничиваем значения цвета
+        color = np.clip(color, 0, 1)
             
-            return color
+        return color
 
 class Texture:
     def __init__(self, width=64, height=64):
@@ -1927,7 +1931,7 @@ class Application:
             screen_x = int(x_proj)
             screen_y = int(y_proj)
             projected_points.append((screen_x, screen_y))
-            original_points.append((x, y, z_proj))
+            original_points.append((x, y, z))
             original_normals.append(p.normal)
             
             # Сохраняем цвета вершин для шейдинга Гуро
